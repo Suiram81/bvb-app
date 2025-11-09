@@ -5,7 +5,7 @@ import numpy as np
 import yfinance as yf
 import streamlit as st
 
-APP_TITLE = "BVB Recommender Web v1"
+APP_TITLE = "BVB Recommender Web v1.1"
 
 BET_TICKERS = ["^BETI","^BET"]
 
@@ -34,6 +34,8 @@ DEFAULT_SETTINGS = {
     "momentum_lookback": 30
 }
 
+DIVIDEND_TAX_NET_RATE = 0.92  # impozit 8% -> net = 92%
+
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_symbol(sym, history_days, momentum_lookback):
     try:
@@ -47,6 +49,7 @@ def fetch_symbol(sym, history_days, momentum_lookback):
         if hist is None or hist.empty:
             return None
 
+        # Pret curent
         price_now = info.get("regularMarketPrice")
         if price_now is None:
             try:
@@ -60,21 +63,37 @@ def fetch_symbol(sym, history_days, momentum_lookback):
 
         day_change = (price_now - prev_close)/prev_close*100 if prev_close else 0.0
 
+        # Momentum 30 zile
         if len(hist) > momentum_lookback:
             p30 = float(hist["Close"].iloc[-1 - momentum_lookback])
         else:
             p30 = float(hist["Close"].iloc[0])
         momentum = (price_now/p30 - 1.0)*100 if p30 else 0.0
 
+        # Volatilitate si volum
         returns = hist["Close"].pct_change().dropna()
         volatility = float(returns.std()*100) if not returns.empty else 0.0
-
         avg_volume = float(hist["Volume"].tail(30).mean()) if "Volume" in hist.columns else 0.0
 
         pe = info.get("trailingPE")
-        dy = info.get("dividendYield")
-        if dy is not None:
-            dy = float(dy)*100.0
+
+        # Ultimul dividend si data
+        try:
+            dividends = tk.dividends
+        except Exception:
+            dividends = None
+
+        last_dividend = None
+        last_div_date = None
+        last_div_net_pct = None
+        if dividends is not None and not dividends.empty:
+            try:
+                last_dividend = float(dividends.iloc[-1])
+                last_div_date = str(dividends.index[-1].date())
+                if price_now:
+                    last_div_net_pct = float(last_dividend * DIVIDEND_TAX_NET_RATE / float(price_now) * 100.0)
+            except Exception:
+                pass
 
         name = info.get("shortName", sym)
 
@@ -87,7 +106,10 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             "volatility": float(volatility),
             "avg_volume": float(avg_volume),
             "pe": float(pe) if pe is not None else None,
-            "yield": float(dy) if dy is not None else None,
+            # folosim randamentul net al ultimului dividend (nu anualizat) pentru scor si afisare
+            "yield": float(last_div_net_pct) if last_div_net_pct is not None else None,
+            "last_dividend_net_pct": float(last_div_net_pct) if last_div_net_pct is not None else None,
+            "last_div_date": last_div_date,
             "history": hist.reset_index()
         }
     except Exception:
@@ -119,7 +141,7 @@ def build_reason(r):
     if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
     if r["avg_volume"] > 100_000: parts.append("volum ridicat")
     if r["pe"] is not None and r["pe"] < 15: parts.append(f"PE {r['pe']:.1f}")
-    if r["yield"] is not None and r["yield"] > 2: parts.append(f"div {r['yield']:.1f}%")
+    # am eliminat afisarea yield-ului anualizat, vom avea coloana separata cu ultimul dividend net %
     return "; ".join(parts) if parts else "-"
 
 def compute_indicators(hist_df):
@@ -222,6 +244,8 @@ df = pd.DataFrame([{
     "Denumire": r["name"],
     "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
     "Delta zi %": round(r["day_change"],2),
+    "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
+    "Data dividend": r.get("last_div_date") if r.get("last_div_date") else "",
     "Scor": round(r["score"],2),
     "Motiv": build_reason(r)
 } for i, r in enumerate(rows_sorted)])
@@ -253,6 +277,8 @@ with col2:
     st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
     st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
     st.metric("Volum mediu 30z", value=int(row['avg_volume']))
+    st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
+    st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
 
     st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index("Date") if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
 

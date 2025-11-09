@@ -6,18 +6,21 @@ import yfinance as yf
 import streamlit as st
 from datetime import datetime, date
 
-APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
+APP_TITLE = "BVB Recommender Web v1.9 (Tradeville scale + taxe 2026 + ETF-uri)"
 
 BET_TICKERS = ["^BETI","^BET"]
 
+# 20 constituenti oficiali BET (noiembrie 2025)
 BET_CONSTITUENTS = [
     "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
     "SNP.RO","ONE.RO","PE.RO","WINE.RO","SNN.RO","SNG.RO","TGN.RO","H2O.RO",
     "EL.RO","SFG.RO","TRP.RO","TTS.RO"
 ]
 
+# ETF-uri solicitate
 ETF_TICKERS = ["TVBETETF.RO", "PTENGETF.RO"]
 
+# Toti emitentii analizati in tabel si in panoul de detalii
 TICKERS = BET_CONSTITUENTS + ETF_TICKERS
 
 BET_PERIODS = {
@@ -37,12 +40,18 @@ DEFAULT_SETTINGS = {
 
 USER_PORTFOLIO = {"TLV.RO","SNP.RO","H2O.RO","EL.RO"}
 
+# Taxe pe dividende:
+# - pana la 2025-12-31 inclusiv: 8% (net 0.92)
+# - de la 2026-01-01: 16% (net 0.84)
 TAX_SWITCHOVER = date(2026, 1, 1)
+
 def net_rate_for_date(dstr):
     try:
         d = datetime.fromisoformat(str(dstr)).date()
     except Exception:
-        d = date.today()
+        # daca nu stim data dividendului, folosim regimul curent calendaristic
+        today = date.today()
+        d = today
     return 0.84 if d >= TAX_SWITCHOVER else 0.92
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -83,6 +92,7 @@ def fetch_symbol(sym, history_days, momentum_lookback):
 
         pe = info.get("trailingPE")
 
+        # ultimul dividend si data; aplicam regimul fiscal in functie de data platii dividendului
         try:
             dividends = tk.dividends
         except Exception:
@@ -126,31 +136,10 @@ def fetch_all(tickers, history_days, momentum_lookback):
     for sym in tickers:
         d = fetch_symbol(sym, history_days, momentum_lookback)
         if d is not None:
-            d["no_data"] = False
             out.append(d)
-        else:
-            # adaugam placeholder pentru PTENGETF.RO cand lipsesc date
-            if sym == "PTENGETF.RO":
-                out.append({
-                    "symbol": sym,
-                    "name": "PTENGETF",
-                    "price": None,
-                    "day_change": 0.0,
-                    "momentum": 0.0,
-                    "volatility": 0.0,
-                    "avg_volume": 0.0,
-                    "pe": None,
-                    "yield": None,
-                    "last_dividend_net_pct": None,
-                    "last_div_date": None,
-                    "history": pd.DataFrame(),
-                    "no_data": True
-                })
     return out
 
 def score_row(r):
-    if r.get("no_data"):
-        return float("nan")
     s = 0.0
     s += r["momentum"] * 0.5
     s += r["volatility"] * 0.1
@@ -162,8 +151,6 @@ def score_row(r):
     return float(s)
 
 def build_reason(r):
-    if r.get("no_data"):
-        return "nu ai date de a genera raportul"
     parts = []
     if r["momentum"] > 0: parts.append(f"+{r['momentum']:.1f}% in 30z")
     if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
@@ -245,6 +232,7 @@ def bet_history(period="3mo", interval="1d"):
     return None, "NA"
 
 def compute_bet_simulare(rows_sorted, period_key):
+    # folosim doar constituenții oficiali, fara ETF-uri
     period_days = {"1 zi":1, "5 zile":5, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
     days = period_days.get(period_key, 90)
     series = []
@@ -311,8 +299,8 @@ with st.sidebar:
 rows = fetch_all(TICKERS, int(history_days), int(momentum_lb))
 for r in rows:
     r["score"] = score_row(r)
-rows_sorted = sorted(rows, key=lambda x: (np.nan_to_num(x["score"], nan=-1e9)), reverse=True)
-rec_map = compute_recommendations([r for r in rows_sorted if not r.get("no_data")])
+rows_sorted = sorted(rows, key=lambda x: x["score"], reverse=True)
+rec_map = compute_recommendations(rows_sorted)
 
 # tabel principal
 st.subheader("Recomandari ordonate 20 companii BET + ETF-uri selectate")
@@ -321,28 +309,17 @@ df = pd.DataFrame([{
     "Simbol": r["symbol"],
     "Denumire": r["name"],
     "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
-    "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
+    "Delta zi %": round(r["day_change"],2),
     "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
     "Data dividend": r.get("last_div_date") if r.get("last_div_date") else "",
-    "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-    "Recomandare": rec_map.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+    "Scor": round(r["score"],2),
+    "Recomandare": rec_map.get(r["symbol"], "Evalueaza"),
     "Motiv": build_reason(r)
 } for i, r in enumerate(rows_sorted)])
 st.dataframe(df, use_container_width=True, hide_index=True)
 
 # coloane: BET + detalii actiune
 col1, col2 = st.columns([1,1])
-
-def bet_history(period="3mo", interval="1d"):
-    for sym in BET_TICKERS:
-        try:
-            tk = yf.Ticker(sym)
-            h = tk.history(period=period, interval=interval, timeout=20, auto_adjust=False)
-            if h is not None and not h.empty:
-                return h[["Close"]].rename(columns={"Close": "BET_Close"}), "BET Yahoo"
-        except Exception:
-            pass
-    return None, "NA"
 
 with col1:
     st.subheader("Indice BET")
@@ -351,39 +328,27 @@ with col1:
     bet_yahoo, _ = bet_history(period, interval)
     simulare = compute_bet_simulare(rows_sorted, choice)
 
-    if bet_yahoo is not None and not bet_yahoo.empty:
-        yahoo_last = float(bet_yahoo['BET_Close'].iloc[-1])
-        yahoo_prev = float(bet_yahoo['BET_Close'].iloc[-2]) if len(bet_yahoo) >= 2 else yahoo_last
-        val = yahoo_last
-        var = val - yahoo_prev
-        varpct = (var / yahoo_prev * 100.0) if yahoo_prev else 0.0
-        data = simulare if simulare is not None else bet_yahoo
-        if data is not None and not data.empty:
-            scale = val / float(data['BET_Close'].iloc[-1])
-            data = data.copy()
-            data['BET_Close'] = data['BET_Close'] * scale
+    # Scara Tradeville fixa, fara controale, fara caption suplimentar
+    data = simulare if simulare is not None else bet_yahoo
+    anchor_default = float(bet_yahoo['BET_Close'].iloc[-1]) if bet_yahoo is not None else 22865.87
+    if data is not None and not data.empty:
+        scale = anchor_default / float(data['BET_Close'].iloc[-1])
+        data = data.copy()
+        data['BET_Close'] = data['BET_Close'] * scale
+        if len(data) >= 2:
+            last = float(data['BET_Close'].iloc[-1])
+            prev = float(data['BET_Close'].iloc[-2])
+            var = last - prev
+            varpct = (var / prev * 100.0) if prev else 0.0
+        else:
+            last, var, varpct = anchor_default, 0.0, 0.0
         m1, m2, m3 = st.columns(3)
-        m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
+        m1.metric("Valoare", f"{last:,.2f}".replace(","," ").replace(".",","))
         m2.metric("Var", f"{var:+.2f}".replace(".",","))
         m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-        if data is not None and not data.empty:
-            st.line_chart(data["BET_Close"])
-        else:
-            st.write("Date indisponibile")
+        st.line_chart(data["BET_Close"])
     else:
-        data = simulare
-        if data is not None and not data.empty:
-            val = float(data['BET_Close'].iloc[-1])
-            prev = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val
-            var = val - prev
-            varpct = (var / prev * 100.0) if prev else 0.0
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
-            m2.metric("Var", f"{var:+.2f}".replace(".",","))
-            m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-            st.line_chart(data["BET_Close"])
-        else:
-            st.write("Date indisponibile")
+        st.write("Date indisponibile")
 
 with col2:
     st.subheader("Detalii actiune")
@@ -391,15 +356,12 @@ with col2:
     sel = st.selectbox("Alege simbol", symbols)
     row = next(r for r in rows_sorted if r["symbol"] == sel)
     h = row["history"].copy()
-    if row.get("no_data"):
-        st.write("nu ai date de a genera raportul")
-    else:
-        h["Close"] = h["Close"].astype(float)
-        st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
-        st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
-        st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
-        st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
-        st.metric("Volum mediu 30z", value=int(row['avg_volume']))
-        st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-        st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
-        st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
+    h["Close"] = h["Close"].astype(float)
+    st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
+    st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
+    st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
+    st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
+    st.metric("Volum mediu 30z", value=int(row['avg_volume']))
+    st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
+    st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
+    st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])

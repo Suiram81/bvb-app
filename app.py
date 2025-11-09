@@ -5,7 +5,7 @@ import numpy as np
 import yfinance as yf
 import streamlit as st
 
-APP_TITLE = "BVB Recommender Web v1.7 (full + Scara Tradeville)"
+APP_TITLE = "BVB Recommender Web v1.8 (Tradeville scale only)"
 
 BET_TICKERS = ["^BETI","^BET"]
 
@@ -298,64 +298,28 @@ with col1:
     bet_yahoo, _ = bet_history(period, interval)
     simulare = compute_bet_simulare(rows_sorted, choice)
 
-    mode = st.selectbox("Mod afisare", ["Scara Tradeville", "Nivel oficial Yahoo", "Simulare BET normalizat 100"])
-
-    if mode == "Scara Tradeville":
-        data = simulare if simulare is not None else bet_yahoo
-        anchor_default = float(bet_yahoo['BET_Close'].iloc[-1]) if bet_yahoo is not None else 22865.87
-        anchor = st.number_input("Valoare curenta BET (Tradeville)", value=float(round(anchor_default,2)))
-        label = "Sursa: Simulare BET ancorata la nivel Tradeville" if simulare is not None else "Sursa: BET Yahoo"
-        if data is not None and not data.empty:
-            # ancoreaza seria la valoarea dorita
-            scale = anchor / float(data['BET_Close'].iloc[-1])
-            data = data.copy()
-            data['BET_Close'] = data['BET_Close'] * scale
-            # calculeaza Var si Var%
-            if len(data) >= 2:
-                last = float(data['BET_Close'].iloc[-1])
-                prev = float(data['BET_Close'].iloc[-2])
-                var = last - prev
-                varpct = (var / prev * 100.0) if prev else 0.0
-            else:
-                last = anchor
-                var = 0.0
-                varpct = 0.0
-            # afiseaza metricele in stil Tradeville
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Valoare", f"{last:,.2f}".replace(","," ").replace(".",","))
-            m2.metric("Var", f"{var:+.2f}".replace(".",","))
-            m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-        else:
-            st.write("Date indisponibile")
-    elif mode == "Nivel oficial Yahoo":
-        data = bet_yahoo
-        label = "Sursa: BET Yahoo"
-    else:
-        data = simulare
-        label = "Sursa: Simulare BET (100 la start)"
-
-    if mode != "Scara Tradeville":
-        if data is None or data.empty:
-            st.write("Date indisponibile")
-        else:
-            # calculeaza si afiseaza metricele aici pe baza seriei
-            if len(data) >= 2:
-                last = float(data['BET_Close'].iloc[-1])
-                prev = float(data['BET_Close'].iloc[-2])
-                var = last - prev
-                varpct = (var / prev * 100.0) if prev else 0.0
-            else:
-                last = data['BET_Close'].iloc[-1] if len(data) else 0.0
-                var = 0.0
-                varpct = 0.0
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Valoare", f"{last:,.2f}".replace(","," ").replace(".",","))
-            m2.metric("Var", f"{var:+.2f}".replace(".",","))
-            m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-
+    # Scara Tradeville fixa fara controale
+    data = simulare if simulare is not None else bet_yahoo
+    # ancora la nivel Yahoo curent daca exista, altfel la o valoare de referinta
+    anchor_default = float(bet_yahoo['BET_Close'].iloc[-1]) if bet_yahoo is not None else 22865.87
     if data is not None and not data.empty:
-        st.caption(label)
+        scale = anchor_default / float(data['BET_Close'].iloc[-1])
+        data = data.copy()
+        data['BET_Close'] = data['BET_Close'] * scale
+        if len(data) >= 2:
+            last = float(data['BET_Close'].iloc[-1])
+            prev = float(data['BET_Close'].iloc[-2])
+            var = last - prev
+            varpct = (var / prev * 100.0) if prev else 0.0
+        else:
+            last, var, varpct = anchor_default, 0.0, 0.0
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Valoare", f"{last:,.2f}".replace(","," ").replace(".",","))
+        m2.metric("Var", f"{var:+.2f}".replace(".",","))
+        m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
         st.line_chart(data["BET_Close"])
+    else:
+        st.write("Date indisponibile")
 
 with col2:
     st.subheader("Detalii actiune")

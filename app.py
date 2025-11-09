@@ -5,7 +5,7 @@ import numpy as np
 import yfinance as yf
 import streamlit as st
 
-APP_TITLE = "BVB Recommender Web v1.1"
+APP_TITLE = "BVB Recommender Web v1.2"
 
 BET_TICKERS = ["^BETI","^BET"]
 
@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
 }
 
 DIVIDEND_TAX_NET_RATE = 0.92  # impozit 8% -> net = 92%
+USER_PORTFOLIO = {"TLV.RO","SNP.RO","H2O.RO","EL.RO"}
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_symbol(sym, history_days, momentum_lookback):
@@ -106,7 +107,6 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             "volatility": float(volatility),
             "avg_volume": float(avg_volume),
             "pe": float(pe) if pe is not None else None,
-            # folosim randamentul net al ultimului dividend (nu anualizat) pentru scor si afisare
             "yield": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_dividend_net_pct": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_div_date": last_div_date,
@@ -141,7 +141,6 @@ def build_reason(r):
     if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
     if r["avg_volume"] > 100_000: parts.append("volum ridicat")
     if r["pe"] is not None and r["pe"] < 15: parts.append(f"PE {r['pe']:.1f}")
-    # am eliminat afisarea yield-ului anualizat, vom avea coloana separata cu ultimul dividend net %
     return "; ".join(parts) if parts else "-"
 
 def compute_indicators(hist_df):
@@ -221,6 +220,38 @@ def bet_history(period="3mo", interval="1d"):
             pass
     return pd.DataFrame()
 
+def compute_recommendations(rows_sorted):
+    # calculeaza verdictul tehnic si recomandarile
+    scores = [r["score"] for r in rows_sorted if "score" in r]
+    if len(scores) >= 4:
+        q25, q75 = np.percentile(scores, [25, 75])
+    else:
+        q25, q75 = (np.min(scores), np.max(scores))
+
+    rec_map = {}
+    for r in rows_sorted:
+        h = r["history"].copy()
+        h = h.set_index(h.columns[0])
+        v_text, _ = verdict(compute_indicators(h))
+        s = r["score"]
+        if v_text == "OK de cumparat" and s >= q75:
+            rec = "Cumpara"
+        elif s >= q25 and s < q75:
+            rec = "Mentine"
+        elif v_text == "De evitat acum" and s < q25:
+            rec = "Vinde"
+        else:
+            rec = "Evalueaza"
+
+        # personalizare pentru portofoliu
+        if r["symbol"] in USER_PORTFOLIO:
+            if rec == "Cumpara":
+                rec = "Mentine"
+            # pastram "Vinde" neschimbat pentru semnal clar
+
+        rec_map[r["symbol"]] = rec
+    return rec_map
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
@@ -237,6 +268,7 @@ for r in rows:
     r["score"] = score_row(r)
 
 rows_sorted = sorted(rows, key=lambda x: x["score"], reverse=True)
+rec_map = compute_recommendations(rows_sorted)
 
 df = pd.DataFrame([{
     "Nr": i+1,
@@ -247,6 +279,7 @@ df = pd.DataFrame([{
     "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
     "Data dividend": r.get("last_div_date") if r.get("last_div_date") else "",
     "Scor": round(r["score"],2),
+    "Recomandare": rec_map.get(r["symbol"], "Evalueaza"),
     "Motiv": build_reason(r)
 } for i, r in enumerate(rows_sorted)])
 
@@ -284,5 +317,5 @@ with col2:
 
     m = compute_indicators(h.set_index(h.columns[0]))
     v, reason = verdict(m)
-    st.write(f"Recomandare: {v}")
+    st.write(f"Recomandare tehnica: {v}")
     st.write(f"Motiv: {reason}")

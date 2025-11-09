@@ -4,17 +4,24 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import streamlit as st
+from datetime import datetime, date
 
-APP_TITLE = "BVB Recommender Web v1.8 (Tradeville scale only)"
+APP_TITLE = "BVB Recommender Web v1.9 (Tradeville scale + taxe 2026 + ETF-uri)"
 
 BET_TICKERS = ["^BETI","^BET"]
 
 # 20 constituenti oficiali BET (noiembrie 2025)
-TICKERS = [
+BET_CONSTITUENTS = [
     "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
     "SNP.RO","ONE.RO","PE.RO","WINE.RO","SNN.RO","SNG.RO","TGN.RO","H2O.RO",
     "EL.RO","SFG.RO","TRP.RO","TTS.RO"
 ]
+
+# ETF-uri solicitate
+ETF_TICKERS = ["TVBETETF.RO", "PTENGETF.RO"]
+
+# Toti emitentii analizati in tabel si in panoul de detalii
+TICKERS = BET_CONSTITUENTS + ETF_TICKERS
 
 BET_PERIODS = {
     "1 zi": ("1d", "5m"),
@@ -31,8 +38,21 @@ DEFAULT_SETTINGS = {
     "momentum_lookback": 30
 }
 
-DIVIDEND_TAX_NET_RATE = 0.92
 USER_PORTFOLIO = {"TLV.RO","SNP.RO","H2O.RO","EL.RO"}
+
+# Taxe pe dividende:
+# - pana la 2025-12-31 inclusiv: 8% (net 0.92)
+# - de la 2026-01-01: 16% (net 0.84)
+TAX_SWITCHOVER = date(2026, 1, 1)
+
+def net_rate_for_date(dstr):
+    try:
+        d = datetime.fromisoformat(str(dstr)).date()
+    except Exception:
+        # daca nu stim data dividendului, folosim regimul curent calendaristic
+        today = date.today()
+        d = today
+    return 0.84 if d >= TAX_SWITCHOVER else 0.92
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_symbol(sym, history_days, momentum_lookback):
@@ -42,18 +62,22 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             info = tk.info
         except Exception:
             info = {}
+
         hist = tk.history(period=f"{history_days}d", interval="1d", auto_adjust=False, timeout=20)
         if hist is None or hist.empty:
             return None
+
         price_now = info.get("regularMarketPrice")
         if price_now is None:
             try:
                 price_now = float(tk.fast_info.last_price)
             except Exception:
                 price_now = float(hist["Close"].iloc[-1])
+
         prev_close = info.get("previousClose")
         if prev_close is None:
             prev_close = float(hist["Close"].iloc[-2]) if len(hist)>=2 else float(hist["Close"].iloc[-1])
+
         day_change = (price_now - prev_close)/prev_close*100 if prev_close else 0.0
 
         if len(hist) > momentum_lookback:
@@ -68,10 +92,12 @@ def fetch_symbol(sym, history_days, momentum_lookback):
 
         pe = info.get("trailingPE")
 
+        # ultimul dividend si data; aplicam regimul fiscal in functie de data platii dividendului
         try:
             dividends = tk.dividends
         except Exception:
             dividends = None
+
         last_dividend = None
         last_div_date = None
         last_div_net_pct = None
@@ -79,8 +105,9 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             try:
                 last_dividend = float(dividends.iloc[-1])
                 last_div_date = str(dividends.index[-1].date())
-                if price_now:
-                    last_div_net_pct = float(last_dividend * DIVIDEND_TAX_NET_RATE / float(price_now) * 100.0)
+                if price_now and last_dividend:
+                    net_rate = net_rate_for_date(last_div_date)
+                    last_div_net_pct = float(last_dividend * net_rate / float(price_now) * 100.0)
             except Exception:
                 pass
 
@@ -205,10 +232,13 @@ def bet_history(period="3mo", interval="1d"):
     return None, "NA"
 
 def compute_bet_simulare(rows_sorted, period_key):
+    # folosim doar constituenții oficiali, fara ETF-uri
     period_days = {"1 zi":1, "5 zile":5, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
     days = period_days.get(period_key, 90)
     series = []
     for r in rows_sorted:
+        if r["symbol"] not in BET_CONSTITUENTS:
+            continue
         h = r["history"].copy()
         if h.empty:
             continue
@@ -273,7 +303,7 @@ rows_sorted = sorted(rows, key=lambda x: x["score"], reverse=True)
 rec_map = compute_recommendations(rows_sorted)
 
 # tabel principal
-st.subheader("Recomandari ordonate 20 companii BET")
+st.subheader("Recomandari ordonate 20 companii BET + ETF-uri selectate")
 df = pd.DataFrame([{
     "Nr": i+1,
     "Simbol": r["symbol"],
@@ -298,9 +328,8 @@ with col1:
     bet_yahoo, _ = bet_history(period, interval)
     simulare = compute_bet_simulare(rows_sorted, choice)
 
-    # Scara Tradeville fixa fara controale
+    # Scara Tradeville fixa, fara controale, fara caption suplimentar
     data = simulare if simulare is not None else bet_yahoo
-    # ancora la nivel Yahoo curent daca exista, altfel la o valoare de referinta
     anchor_default = float(bet_yahoo['BET_Close'].iloc[-1]) if bet_yahoo is not None else 22865.87
     if data is not None and not data.empty:
         scale = anchor_default / float(data['BET_Close'].iloc[-1])

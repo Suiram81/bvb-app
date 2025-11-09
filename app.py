@@ -5,32 +5,15 @@ import numpy as np
 import yfinance as yf
 import streamlit as st
 
-APP_TITLE = "BVB Recommender Web v1.4"
+APP_TITLE = "BVB Recommender Web v1.7 (full + Scara Tradeville)"
 
 BET_TICKERS = ["^BETI","^BET"]
 
-# Constituenti BET oficiali (noiembrie 2025)
+# 20 constituenti oficiali BET (noiembrie 2025)
 TICKERS = [
-    "ATB.RO",  # Antibiotice
-    "AQ.RO",   # Aquila Part Prod Com
-    "TLV.RO",  # Banca Transilvania
-    "BRD.RO",  # BRD Groupe Societe Generale
-    "TEL.RO",  # Transelectrica
-    "DIGI.RO", # Digi Communications
-    "FP.RO",   # Fondul Proprietatea
-    "M.RO",    # MedLife
-    "SNP.RO",  # OMV Petrom
-    "ONE.RO",  # One United Properties
-    "PE.RO",   # Premier Energy
-    "WINE.RO", # Purcari Wineries
-    "SNN.RO",  # Nuclearelectrica
-    "SNG.RO",  # Romgaz
-    "TGN.RO",  # Transgaz
-    "H2O.RO",  # Hidroelectrica
-    "EL.RO",   # Electrica
-    "SFG.RO",  # Sphera Franchise Group
-    "TRP.RO",  # Teraplast
-    "TTS.RO"   # Transport Trade Services
+    "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
+    "SNP.RO","ONE.RO","PE.RO","WINE.RO","SNN.RO","SNG.RO","TGN.RO","H2O.RO",
+    "EL.RO","SFG.RO","TRP.RO","TTS.RO"
 ]
 
 BET_PERIODS = {
@@ -44,14 +27,11 @@ BET_PERIODS = {
 }
 
 DEFAULT_SETTINGS = {
-    "drop_alert_threshold_pct": -2.0,
-    "market_drop_threshold_pct": -1.5,
-    "breadth_threshold": 0.60,
-    "history_days": 200,
+    "history_days": 250,
     "momentum_lookback": 30
 }
 
-DIVIDEND_TAX_NET_RATE = 0.92  # impozit 8% -> net = 92%
+DIVIDEND_TAX_NET_RATE = 0.92
 USER_PORTFOLIO = {"TLV.RO","SNP.RO","H2O.RO","EL.RO"}
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -62,22 +42,18 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             info = tk.info
         except Exception:
             info = {}
-
         hist = tk.history(period=f"{history_days}d", interval="1d", auto_adjust=False, timeout=20)
         if hist is None or hist.empty:
             return None
-
         price_now = info.get("regularMarketPrice")
         if price_now is None:
             try:
                 price_now = float(tk.fast_info.last_price)
             except Exception:
                 price_now = float(hist["Close"].iloc[-1])
-
         prev_close = info.get("previousClose")
         if prev_close is None:
             prev_close = float(hist["Close"].iloc[-2]) if len(hist)>=2 else float(hist["Close"].iloc[-1])
-
         day_change = (price_now - prev_close)/prev_close*100 if prev_close else 0.0
 
         if len(hist) > momentum_lookback:
@@ -92,12 +68,10 @@ def fetch_symbol(sym, history_days, momentum_lookback):
 
         pe = info.get("trailingPE")
 
-        # ultimul dividend si data
         try:
             dividends = tk.dividends
         except Exception:
             dividends = None
-
         last_dividend = None
         last_div_date = None
         last_div_net_pct = None
@@ -173,7 +147,6 @@ def compute_indicators(hist_df):
         ema_slow = close.ewm(span=26, adjust=False).mean()
         macd = ema_fast - ema_slow
         signal = macd.ewm(span=9, adjust=False).mean()
-
         return {
             "sma50_last": float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else None,
             "sma200_last": float(sma200.iloc[-1]) if not pd.isna(sma200.iloc[-1]) else None,
@@ -190,7 +163,6 @@ def verdict(m):
     rsi = m.get("rsi14_last")
     macd = m.get("macd_last")
     sig = m.get("signal_last")
-
     reasons = []
     good = 0
     bad = 0
@@ -235,7 +207,6 @@ def bet_history(period="3mo", interval="1d"):
 def compute_bet_simulare(rows_sorted, period_key):
     period_days = {"1 zi":1, "5 zile":5, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
     days = period_days.get(period_key, 90)
-
     series = []
     for r in rows_sorted:
         h = r["history"].copy()
@@ -252,10 +223,8 @@ def compute_bet_simulare(rows_sorted, period_key):
             continue
         s_norm = s / base * 100.0
         series.append(s_norm.rename(r["symbol"]))
-
     if not series:
         return None
-
     dfw = pd.concat(series, axis=1, join="inner").dropna(how="all")
     if dfw.empty:
         return None
@@ -268,7 +237,6 @@ def compute_recommendations(rows_sorted):
         q25, q75 = np.percentile(scores, [25, 75])
     else:
         q25, q75 = (np.min(scores), np.max(scores))
-
     rec_map = {}
     for r in rows_sorted:
         h = r["history"].copy()
@@ -283,32 +251,29 @@ def compute_recommendations(rows_sorted):
             rec = "Vinde"
         else:
             rec = "Evalueaza"
-
-        if r["symbol"] in USER_PORTFOLIO:
-            if rec == "Cumpara":
-                rec = "Mentine"
+        if r["symbol"] in USER_PORTFOLIO and rec == "Cumpara":
+            rec = "Mentine"
         rec_map[r["symbol"]] = rec
     return rec_map
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
+
 with st.sidebar:
     st.header("Setari")
-    drop_thr = st.number_input("Prag scadere actiune %", value=DEFAULT_SETTINGS["drop_alert_threshold_pct"], step=0.1, format="%.2f")
-    market_thr = st.number_input("Prag BET %", value=DEFAULT_SETTINGS["market_drop_threshold_pct"], step=0.1, format="%.2f")
-    breadth_thr = st.number_input("Breadth scadere", value=float(DEFAULT_SETTINGS["breadth_threshold"]), step=0.05, format="%.2f")
     history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)
     momentum_lb = st.number_input("Lookback momentum", value=DEFAULT_SETTINGS["momentum_lookback"], step=5)
 
+# date principale
 rows = fetch_all(TICKERS, int(history_days), int(momentum_lb))
 for r in rows:
     r["score"] = score_row(r)
-
 rows_sorted = sorted(rows, key=lambda x: x["score"], reverse=True)
 rec_map = compute_recommendations(rows_sorted)
 
-st.subheader("Recomandari ordonate 20 companii BVB")
+# tabel principal
+st.subheader("Recomandari ordonate 20 companii BET")
 df = pd.DataFrame([{
     "Nr": i+1,
     "Simbol": r["symbol"],
@@ -323,21 +288,74 @@ df = pd.DataFrame([{
 } for i, r in enumerate(rows_sorted)])
 st.dataframe(df, use_container_width=True, hide_index=True)
 
+# coloane: BET + detalii actiune
 col1, col2 = st.columns([1,1])
 
 with col1:
     st.subheader("Indice BET")
-    choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=2, key="bet_period")
-    period, interval = BET_PERIODS.get(choice, ("3mo","1d"))
-    bet, source = bet_history(period, interval)
-    if bet is None:
-        bet = compute_bet_simulare(rows_sorted, choice)
-        source = "Simulare BET (20 companii BET actuale)"
-    if bet is None or bet.empty:
-        st.write("Date indisponibile")
+    choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=5, key="bet_period")
+    period, interval = BET_PERIODS.get(choice, ("1y","1d"))
+    bet_yahoo, _ = bet_history(period, interval)
+    simulare = compute_bet_simulare(rows_sorted, choice)
+
+    mode = st.selectbox("Mod afisare", ["Scara Tradeville", "Nivel oficial Yahoo", "Simulare BET normalizat 100"])
+
+    if mode == "Scara Tradeville":
+        data = simulare if simulare is not None else bet_yahoo
+        anchor_default = float(bet_yahoo['BET_Close'].iloc[-1]) if bet_yahoo is not None else 22865.87
+        anchor = st.number_input("Valoare curenta BET (Tradeville)", value=float(round(anchor_default,2)))
+        label = "Sursa: Simulare BET ancorata la nivel Tradeville" if simulare is not None else "Sursa: BET Yahoo"
+        if data is not None and not data.empty:
+            # ancoreaza seria la valoarea dorita
+            scale = anchor / float(data['BET_Close'].iloc[-1])
+            data = data.copy()
+            data['BET_Close'] = data['BET_Close'] * scale
+            # calculeaza Var si Var%
+            if len(data) >= 2:
+                last = float(data['BET_Close'].iloc[-1])
+                prev = float(data['BET_Close'].iloc[-2])
+                var = last - prev
+                varpct = (var / prev * 100.0) if prev else 0.0
+            else:
+                last = anchor
+                var = 0.0
+                varpct = 0.0
+            # afiseaza metricele in stil Tradeville
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Valoare", f"{last:,.2f}".replace(","," ").replace(".",","))
+            m2.metric("Var", f"{var:+.2f}".replace(".",","))
+            m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
+        else:
+            st.write("Date indisponibile")
+    elif mode == "Nivel oficial Yahoo":
+        data = bet_yahoo
+        label = "Sursa: BET Yahoo"
     else:
-        st.caption(f"Sursa: {source}")
-        st.line_chart(bet["BET_Close"])
+        data = simulare
+        label = "Sursa: Simulare BET (100 la start)"
+
+    if mode != "Scara Tradeville":
+        if data is None or data.empty:
+            st.write("Date indisponibile")
+        else:
+            # calculeaza si afiseaza metricele aici pe baza seriei
+            if len(data) >= 2:
+                last = float(data['BET_Close'].iloc[-1])
+                prev = float(data['BET_Close'].iloc[-2])
+                var = last - prev
+                varpct = (var / prev * 100.0) if prev else 0.0
+            else:
+                last = data['BET_Close'].iloc[-1] if len(data) else 0.0
+                var = 0.0
+                varpct = 0.0
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Valoare", f"{last:,.2f}".replace(","," ").replace(".",","))
+            m2.metric("Var", f"{var:+.2f}".replace(".",","))
+            m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
+
+    if data is not None and not data.empty:
+        st.caption(label)
+        st.line_chart(data["BET_Close"])
 
 with col2:
     st.subheader("Detalii actiune")
@@ -353,10 +371,4 @@ with col2:
     st.metric("Volum mediu 30z", value=int(row['avg_volume']))
     st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
     st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
-
     st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
-
-    m = compute_indicators(h.set_index(h.columns[0]))
-    v, reason = verdict(m)
-    st.write(f"Recomandare tehnica: {v}")
-    st.write(f"Motiv: {reason}")

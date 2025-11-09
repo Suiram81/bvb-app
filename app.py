@@ -5,7 +5,7 @@ import numpy as np
 import yfinance as yf
 import streamlit as st
 
-APP_TITLE = "BVB Recommender Web v1.2"
+APP_TITLE = "BVB Recommender Web v1.3"
 
 BET_TICKERS = ["^BETI","^BET"]
 
@@ -19,7 +19,7 @@ TICKERS = [
 BET_PERIODS = {
     "1 zi": ("1d", "5m"),
     "5 zile": ("5d", "15m"),
-    "1 luna": ("1mo", "1h"),
+    "1 luna": ("1mo", "1d"),
     "3 luni": ("3mo", "1d"),
     "6 luni": ("6mo", "1d"),
     "1 an": ("1y", "1d"),
@@ -210,47 +210,51 @@ def verdict(m):
     return v, "; ".join(reasons) if reasons else "Date insuficiente"
 
 def bet_history(period="3mo", interval="1d"):
+    # 1) Yahoo direct
     for sym in BET_TICKERS:
         try:
             tk = yf.Ticker(sym)
-            h = tk.history(period=period, interval=interval, timeout=20)
+            h = tk.history(period=period, interval=interval, timeout=20, auto_adjust=False)
             if h is not None and not h.empty:
-                return h
+                return h[["Close"]].rename(columns={"Close": "BET_Close"}), "BET Yahoo"
         except Exception:
             pass
-    return pd.DataFrame()
+    return None, "NA"
 
-def compute_recommendations(rows_sorted):
-    # calculeaza verdictul tehnic si recomandarile
-    scores = [r["score"] for r in rows_sorted if "score" in r]
-    if len(scores) >= 4:
-        q25, q75 = np.percentile(scores, [25, 75])
-    else:
-        q25, q75 = (np.min(scores), np.max(scores))
+def compute_bet_synthetic(rows_sorted, period_key):
+    # construieste mini-indice din actiunile deja incarcate
+    # folosim preturile Close din ultimul 'history_days', filtrate dupa perioada selectata aproximativ
+    # mapam perioada spre numar de zile pt filtrare simpla
+    period_days = {"1 zi":1, "5 zile":5, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
+    days = period_days.get(period_key, 90)
 
-    rec_map = {}
+    series = []
     for r in rows_sorted:
         h = r["history"].copy()
-        h = h.set_index(h.columns[0])
-        v_text, _ = verdict(compute_indicators(h))
-        s = r["score"]
-        if v_text == "OK de cumparat" and s >= q75:
-            rec = "Cumpara"
-        elif s >= q25 and s < q75:
-            rec = "Mentine"
-        elif v_text == "De evitat acum" and s < q25:
-            rec = "Vinde"
-        else:
-            rec = "Evalueaza"
+        if h.empty:
+            continue
+        h = h.rename(columns={h.columns[0]: "Date"})
+        h = h.set_index("Date")
+        s = h["Close"].astype(float).copy()
+        # ultima fereastra
+        s = s.iloc[-days:] if len(s) > days else s
+        if len(s) == 0:
+            continue
+        # normalizare
+        base = s.iloc[0]
+        if base == 0 or np.isnan(base):
+            continue
+        s_norm = s / base * 100.0
+        series.append(s_norm.rename(r["symbol"]))
 
-        # personalizare pentru portofoliu
-        if r["symbol"] in USER_PORTFOLIO:
-            if rec == "Cumpara":
-                rec = "Mentine"
-            # pastram "Vinde" neschimbat pentru semnal clar
+    if not series:
+        return None
 
-        rec_map[r["symbol"]] = rec
-    return rec_map
+    dfw = pd.concat(series, axis=1, join="inner").dropna(how="all")
+    if dfw.empty:
+        return None
+    synthetic = dfw.mean(axis=1).to_frame(name="BET_Close")
+    return synthetic
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -268,8 +272,8 @@ for r in rows:
     r["score"] = score_row(r)
 
 rows_sorted = sorted(rows, key=lambda x: x["score"], reverse=True)
-rec_map = compute_recommendations(rows_sorted)
 
+st.subheader("Recomandari ordonate 20 companii BVB")
 df = pd.DataFrame([{
     "Nr": i+1,
     "Simbol": r["symbol"],
@@ -279,24 +283,25 @@ df = pd.DataFrame([{
     "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
     "Data dividend": r.get("last_div_date") if r.get("last_div_date") else "",
     "Scor": round(r["score"],2),
-    "Recomandare": rec_map.get(r["symbol"], "Evalueaza"),
     "Motiv": build_reason(r)
 } for i, r in enumerate(rows_sorted)])
-
-st.subheader("Recomandari ordonate 20 companii BVB")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
 col1, col2 = st.columns([1,1])
 
 with col1:
     st.subheader("Indice BET")
-    choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=2)
+    choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=2, key="bet_period")
     period, interval = BET_PERIODS.get(choice, ("3mo","1d"))
-    bet = bet_history(period, interval)
+    bet, source = bet_history(period, interval)
+    if bet is None:
+        bet = compute_bet_synthetic(rows_sorted, choice)
+        source = "Mini-BET (sintetic pe 20 tickere)"
     if bet is None or bet.empty:
         st.write("Date indisponibile")
     else:
-        st.line_chart(bet["Close"])
+        st.caption(f"Sursa: {source}")
+        st.line_chart(bet["BET_Close"])
 
 with col2:
     st.subheader("Detalii actiune")
@@ -310,12 +315,76 @@ with col2:
     st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
     st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
     st.metric("Volum mediu 30z", value=int(row['avg_volume']))
-    st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-    st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
 
-    st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index("Date") if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
+    # grafic pret
+    st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
 
-    m = compute_indicators(h.set_index(h.columns[0]))
-    v, reason = verdict(m)
-    st.write(f"Recomandare tehnica: {v}")
+    # indicatori si recomandare tehnica
+    def _compute_ind(df):
+        from math import isnan
+        try:
+            close = df["Close"]
+            sma50 = close.rolling(50).mean()
+            sma200 = close.rolling(200).mean()
+            delta = close.diff()
+            up = delta.clip(lower=0)
+            down = -1*delta.clip(upper=0)
+            ma_up = up.rolling(14).mean()
+            ma_down = down.rolling(14).mean().replace(0, 1e-9)
+            rs = ma_up / ma_down
+            rsi14 = 100 - (100/(1+rs))
+            ema_fast = close.ewm(span=12, adjust=False).mean()
+            ema_slow = close.ewm(span=26, adjust=False).mean()
+            macd = ema_fast - ema_slow
+            signal = macd.ewm(span=9, adjust=False).mean()
+
+            return {
+                "sma50_last": float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else None,
+                "sma200_last": float(sma200.iloc[-1]) if not pd.isna(sma200.iloc[-1]) else None,
+                "rsi14_last": float(rsi14.iloc[-1]) if not pd.isna(rsi14.iloc[-1]) else None,
+                "macd_last": float(macd.iloc[-1]) if not pd.isna(macd.iloc[-1]) else None,
+                "signal_last": float(signal.iloc[-1]) if not pd.isna(signal.iloc[-1]) else None,
+            }
+        except Exception:
+            return {}
+
+    m = _compute_ind(h.set_index(h.columns[0]))
+    def _verdict(m):
+        sma50 = m.get("sma50_last")
+        sma200 = m.get("sma200_last")
+        rsi = m.get("rsi14_last")
+        macd = m.get("macd_last")
+        sig = m.get("signal_last")
+        reasons = []
+        good = 0
+        bad = 0
+        if sma50 is not None and sma200 is not None:
+            if sma50 > sma200:
+                reasons.append("trend pozitiv SMA50 peste SMA200")
+                good += 1
+            else:
+                reasons.append("trend slab SMA50 sub SMA200")
+                bad += 1
+        if rsi is not None:
+            if 40 <= rsi <= 70:
+                reasons.append("RSI zona ok")
+                good += 1
+            elif rsi < 30:
+                reasons.append("RSI supravandut")
+                good += 1
+            else:
+                reasons.append("RSI supracumparat")
+                bad += 1
+        if macd is not None and sig is not None:
+            if macd > sig:
+                reasons.append("MACD peste semnal")
+                good += 1
+            else:
+                reasons.append("MACD sub semnal")
+                bad += 1
+        v = "OK de cumparat" if good >= bad else "De evitat acum"
+        return v, "; ".join(reasons) if reasons else "Date insuficiente"
+
+    v, reason = _verdict(m)
+    st.write(f"Recomandare: {v}")
     st.write(f"Motiv: {reason}")

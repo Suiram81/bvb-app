@@ -302,6 +302,16 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
 
+# ALERTĂ CORECȚIE
+st.subheader("Alerte corecție tehnică")
+alerts = check_correction_alert([r for r in rows if not r.get("no_data")])
+if alerts:
+    for sym, rsi, macd, sig in alerts:
+        st.warning(f"Atenție: posibilă corecție pe {sym} (RSI {rsi:.1f}, MACD {macd:.2f} < semnal {sig:.2f})")
+else:
+    st.success("Nu sunt semnale clare de corecție pe baza RSI și MACD.")
+
+
 with st.sidebar:
     st.header("Setari")
     history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)

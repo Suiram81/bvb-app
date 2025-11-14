@@ -1,4 +1,6 @@
 
+# app_bvb_alerta.py
+
 import time
 import pandas as pd
 import numpy as np
@@ -6,38 +8,25 @@ import yfinance as yf
 import streamlit as st
 from datetime import datetime, date
 
-APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
+APP_TITLE = "BVB Recommender Web v1.9.2 + Alertă corecție"
 
 BET_TICKERS = ["^BETI","^BET"]
-
 BET_CONSTITUENTS = [
     "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
     "SNP.RO","ONE.RO","PE.RO","WINE.RO","SNN.RO","SNG.RO","TGN.RO","H2O.RO",
     "EL.RO","SFG.RO","TRP.RO","TTS.RO"
 ]
-
 ETF_TICKERS = ["TVBETETF.RO", "PTENGETF.RO"]
-
 TICKERS = BET_CONSTITUENTS + ETF_TICKERS
-
 BET_PERIODS = {
-    "1 zi": ("1d", "5m"),
-    "5 zile": ("5d", "15m"),
-    "1 luna": ("1mo", "1d"),
-    "3 luni": ("3mo", "1d"),
-    "6 luni": ("6mo", "1d"),
-    "1 an": ("1y", "1d"),
-    "5 ani": ("5y", "1wk"),
+    "1 zi": ("1d", "5m"), "5 zile": ("5d", "15m"), "1 luna": ("1mo", "1d"),
+    "3 luni": ("3mo", "1d"), "6 luni": ("6mo", "1d"),
+    "1 an": ("1y", "1d"), "5 ani": ("5y", "1wk"),
 }
-
-DEFAULT_SETTINGS = {
-    "history_days": 250,
-    "momentum_lookback": 30
-}
-
+DEFAULT_SETTINGS = {"history_days": 250, "momentum_lookback": 30}
 USER_PORTFOLIO = {"TLV.RO","SNP.RO","H2O.RO","EL.RO"}
-
 TAX_SWITCHOVER = date(2026, 1, 1)
+
 def net_rate_for_date(dstr):
     try:
         d = datetime.fromisoformat(str(dstr)).date()
@@ -49,48 +38,22 @@ def net_rate_for_date(dstr):
 def fetch_symbol(sym, history_days, momentum_lookback):
     try:
         tk = yf.Ticker(sym)
-        try:
-            info = tk.info
-        except Exception:
-            info = {}
-
+        try: info = tk.info
+        except: info = {}
         hist = tk.history(period=f"{history_days}d", interval="1d", auto_adjust=False, timeout=20)
-        if hist is None or hist.empty:
-            return None
-
-        price_now = info.get("regularMarketPrice")
-        if price_now is None:
-            try:
-                price_now = float(tk.fast_info.last_price)
-            except Exception:
-                price_now = float(hist["Close"].iloc[-1])
-
-        prev_close = info.get("previousClose")
-        if prev_close is None:
-            prev_close = float(hist["Close"].iloc[-2]) if len(hist)>=2 else float(hist["Close"].iloc[-1])
-
+        if hist is None or hist.empty: return None
+        price_now = info.get("regularMarketPrice") or float(tk.fast_info.last_price)
+        prev_close = info.get("previousClose") or float(hist["Close"].iloc[-2])
         day_change = (price_now - prev_close)/prev_close*100 if prev_close else 0.0
-
-        if len(hist) > momentum_lookback:
-            p30 = float(hist["Close"].iloc[-1 - momentum_lookback])
-        else:
-            p30 = float(hist["Close"].iloc[0])
+        p30 = float(hist["Close"].iloc[-1 - momentum_lookback]) if len(hist) > momentum_lookback else float(hist["Close"].iloc[0])
         momentum = (price_now/p30 - 1.0)*100 if p30 else 0.0
-
         returns = hist["Close"].pct_change().dropna()
         volatility = float(returns.std()*100) if not returns.empty else 0.0
         avg_volume = float(hist["Volume"].tail(30).mean()) if "Volume" in hist.columns else 0.0
-
         pe = info.get("trailingPE")
-
-        try:
-            dividends = tk.dividends
-        except Exception:
-            dividends = None
-
-        last_dividend = None
-        last_div_date = None
-        last_div_net_pct = None
+        try: dividends = tk.dividends
+        except: dividends = None
+        last_dividend = last_div_date = last_div_net_pct = None
         if dividends is not None and not dividends.empty:
             try:
                 last_dividend = float(dividends.iloc[-1])
@@ -98,78 +61,30 @@ def fetch_symbol(sym, history_days, momentum_lookback):
                 if price_now and last_dividend:
                     net_rate = net_rate_for_date(last_div_date)
                     last_div_net_pct = float(last_dividend * net_rate / float(price_now) * 100.0)
-            except Exception:
-                pass
-
+            except: pass
         name = info.get("shortName", sym)
-
         return {
-            "symbol": sym,
-            "name": name,
-            "price": float(price_now) if price_now is not None else None,
-            "day_change": float(day_change),
-            "momentum": float(momentum),
-            "volatility": float(volatility),
-            "avg_volume": float(avg_volume),
+            "symbol": sym, "name": name, "price": float(price_now),
+            "day_change": float(day_change), "momentum": float(momentum),
+            "volatility": float(volatility), "avg_volume": float(avg_volume),
             "pe": float(pe) if pe is not None else None,
             "yield": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_dividend_net_pct": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_div_date": last_div_date,
             "history": hist.reset_index()
         }
-    except Exception:
-        return None
+    except: return None
 
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_all(tickers, history_days, momentum_lookback):
-    out = []
-    for sym in tickers:
-        d = fetch_symbol(sym, history_days, momentum_lookback)
-        if d is not None:
-            d["no_data"] = False
-            out.append(d)
-        else:
-            # adaugam placeholder pentru PTENGETF.RO cand lipsesc date
-            if sym == "PTENGETF.RO":
-                out.append({
-                    "symbol": sym,
-                    "name": "PTENGETF",
-                    "price": None,
-                    "day_change": 0.0,
-                    "momentum": 0.0,
-                    "volatility": 0.0,
-                    "avg_volume": 0.0,
-                    "pe": None,
-                    "yield": None,
-                    "last_dividend_net_pct": None,
-                    "last_div_date": None,
-                    "history": pd.DataFrame(),
-                    "no_data": True
-                })
-    return out
-
-def score_row(r):
-    if r.get("no_data"):
-        return float("nan")
-    s = 0.0
-    s += r["momentum"] * 0.5
-    s += r["volatility"] * 0.1
-    s += (r["avg_volume"]/1_000_000.0) * 0.2
-    if r["pe"] is not None:
-        s += max(0.0, 20.0 - r["pe"]) * 0.3
-    if r["yield"] is not None:
-        s += r["yield"] * 0.2
-    return float(s)
-
-def build_reason(r):
-    if r.get("no_data"):
-        return "nu ai date de a genera raportul"
-    parts = []
-    if r["momentum"] > 0: parts.append(f"+{r['momentum']:.1f}% in 30z")
-    if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
-    if r["avg_volume"] > 100_000: parts.append("volum ridicat")
-    if r["pe"] is not None and r["pe"] < 15: parts.append(f"PE {r['pe']:.1f}")
-    return "; ".join(parts) if parts else "-"
+def fetch_bet_data():
+    for sym in BET_TICKERS:
+        try:
+            tk = yf.Ticker(sym)
+            h = tk.history(period="6mo", interval="1d")
+            if h is not None and not h.empty:
+                return h
+        except: pass
+    return pd.DataFrame()
 
 def compute_indicators(hist_df):
     try:
@@ -188,218 +103,33 @@ def compute_indicators(hist_df):
         macd = ema_fast - ema_slow
         signal = macd.ewm(span=9, adjust=False).mean()
         return {
-            "sma50_last": float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else None,
-            "sma200_last": float(sma200.iloc[-1]) if not pd.isna(sma200.iloc[-1]) else None,
-            "rsi14_last": float(rsi14.iloc[-1]) if not pd.isna(rsi14.iloc[-1]) else None,
-            "macd_last": float(macd.iloc[-1]) if not pd.isna(macd.iloc[-1]) else None,
-            "signal_last": float(signal.iloc[-1]) if not pd.isna(signal.iloc[-1]) else None,
+            "sma50_last": float(sma50.iloc[-1]),
+            "sma200_last": float(sma200.iloc[-1]),
+            "rsi14_last": float(rsi14.iloc[-1]),
+            "macd_last": float(macd.iloc[-1]),
+            "signal_last": float(signal.iloc[-1]),
         }
-    except Exception:
+    except:
         return {}
 
-def verdict(m):
-    sma50 = m.get("sma50_last")
-    sma200 = m.get("sma200_last")
-    rsi = m.get("rsi14_last")
-    macd = m.get("macd_last")
-    sig = m.get("signal_last")
-    reasons = []
-    good = 0
-    bad = 0
-    if sma50 is not None and sma200 is not None:
-        if sma50 > sma200:
-            reasons.append("trend pozitiv SMA50 peste SMA200")
-            good += 1
-        else:
-            reasons.append("trend slab SMA50 sub SMA200")
-            bad += 1
-    if rsi is not None:
-        if 40 <= rsi <= 70:
-            reasons.append("RSI zona ok")
-            good += 1
-        elif rsi < 30:
-            reasons.append("RSI supravandut")
-            good += 1
-        else:
-            reasons.append("RSI supracumparat")
-            bad += 1
-    if macd is not None and sig is not None:
-        if macd > sig:
-            reasons.append("MACD peste semnal")
-            good += 1
-        else:
-            reasons.append("MACD sub semnal")
-            bad += 1
-    v = "OK de cumparat" if good >= bad else "De evitat acum"
-    return v, "; ".join(reasons) if reasons else "Date insuficiente"
+def alerta_corectie_bet(bet_hist):
+    if bet_hist is None or bet_hist.empty:
+        return "Date BET indisponibile."
+    indic = compute_indicators(bet_hist)
+    if not indic:
+        return "Date insuficiente pentru alertă."
+    alerts = []
+    if indic["rsi14_last"] > 70:
+        alerts.append("RSI peste 70 - posibil supracumpărat.")
+    if indic["macd_last"] < indic["signal_last"]:
+        alerts.append("MACD sub semnal - semnal de slăbiciune.")
+    if indic["sma50_last"] < indic["sma200_last"]:
+        alerts.append("SMA50 a coborât sub SMA200 - risc de corecție.")
+    return alerts if alerts else ["Niciun semnal major de corecție."]
 
-def bet_history(period="3mo", interval="1d"):
-    for sym in BET_TICKERS:
-        try:
-            tk = yf.Ticker(sym)
-            h = tk.history(period=period, interval=interval, timeout=20, auto_adjust=False)
-            if h is not None and not h.empty:
-                return h[["Close"]].rename(columns={"Close": "BET_Close"}), "BET Yahoo"
-        except Exception:
-            pass
-    return None, "NA"
-
-def compute_bet_simulare(rows_sorted, period_key):
-    period_days = {"1 zi":1, "5 zile":5, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
-    days = period_days.get(period_key, 90)
-    series = []
-    for r in rows_sorted:
-        if r["symbol"] not in BET_CONSTITUENTS:
-            continue
-        h = r["history"].copy()
-        if h.empty:
-            continue
-        h = h.rename(columns={h.columns[0]: "Date"})
-        h = h.set_index("Date")
-        s = h["Close"].astype(float).copy()
-        s = s.iloc[-days:] if len(s) > days else s
-        if len(s) == 0:
-            continue
-        base = s.iloc[0]
-        if base == 0 or np.isnan(base):
-            continue
-        s_norm = s / base * 100.0
-        series.append(s_norm.rename(r["symbol"]))
-    if not series:
-        return None
-    dfw = pd.concat(series, axis=1, join="inner").dropna(how="all")
-    if dfw.empty:
-        return None
-    simulare = dfw.mean(axis=1).to_frame(name="BET_Close")
-    return simulare
-
-def compute_recommendations(rows_sorted):
-    scores = [r["score"] for r in rows_sorted if "score" in r]
-    if len(scores) >= 4:
-        q25, q75 = np.percentile(scores, [25, 75])
-    else:
-        q25, q75 = (np.min(scores), np.max(scores))
-    rec_map = {}
-    for r in rows_sorted:
-        h = r["history"].copy()
-        h = h.set_index(h.columns[0])
-        v_text, _ = verdict(compute_indicators(h))
-        s = r["score"]
-        if v_text == "OK de cumparat" and s >= q75:
-            rec = "Cumpara"
-        elif s >= q25 and s < q75:
-            rec = "Mentine"
-        elif v_text == "De evitat acum" and s < q25:
-            rec = "Vinde"
-        else:
-            rec = "Evalueaza"
-        if r["symbol"] in USER_PORTFOLIO and rec == "Cumpara":
-            rec = "Mentine"
-        rec_map[r["symbol"]] = rec
-    return rec_map
-
-st.set_page_config(page_title=APP_TITLE, layout="wide")
-
-st.title("BVB Recommender")
-
-with st.sidebar:
-    st.header("Setari")
-    history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)
-    momentum_lb = st.number_input("Lookback momentum", value=DEFAULT_SETTINGS["momentum_lookback"], step=5)
-
-# date principale
-rows = fetch_all(TICKERS, int(history_days), int(momentum_lb))
-for r in rows:
-    r["score"] = score_row(r)
-rows_sorted = sorted(rows, key=lambda x: (np.nan_to_num(x["score"], nan=-1e9)), reverse=True)
-rec_map = compute_recommendations([r for r in rows_sorted if not r.get("no_data")])
-
-# tabel principal
-st.subheader("Recomandari ordonate 20 companii BET + ETF-uri selectate")
-df = pd.DataFrame([{
-    "Nr": i+1,
-    "Simbol": r["symbol"],
-    "Denumire": r["name"],
-    "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
-    "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
-    "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-    "Data dividend": r.get("last_div_date") if r.get("last_div_date") else "",
-    "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-    "Recomandare": rec_map.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
-    "Motiv": build_reason(r)
-} for i, r in enumerate(rows_sorted)])
-st.dataframe(df, use_container_width=True, hide_index=True)
-
-# coloane: BET + detalii actiune
-col1, col2 = st.columns([1,1])
-
-def bet_history(period="3mo", interval="1d"):
-    for sym in BET_TICKERS:
-        try:
-            tk = yf.Ticker(sym)
-            h = tk.history(period=period, interval=interval, timeout=20, auto_adjust=False)
-            if h is not None and not h.empty:
-                return h[["Close"]].rename(columns={"Close": "BET_Close"}), "BET Yahoo"
-        except Exception:
-            pass
-    return None, "NA"
-
-with col1:
-    st.subheader("Indice BET")
-    choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=5, key="bet_period")
-    period, interval = BET_PERIODS.get(choice, ("1y","1d"))
-    bet_yahoo, _ = bet_history(period, interval)
-    simulare = compute_bet_simulare(rows_sorted, choice)
-
-    if bet_yahoo is not None and not bet_yahoo.empty:
-        yahoo_last = float(bet_yahoo['BET_Close'].iloc[-1])
-        yahoo_prev = float(bet_yahoo['BET_Close'].iloc[-2]) if len(bet_yahoo) >= 2 else yahoo_last
-        val = yahoo_last
-        var = val - yahoo_prev
-        varpct = (var / yahoo_prev * 100.0) if yahoo_prev else 0.0
-        data = simulare if simulare is not None else bet_yahoo
-        if data is not None and not data.empty:
-            scale = val / float(data['BET_Close'].iloc[-1])
-            data = data.copy()
-            data['BET_Close'] = data['BET_Close'] * scale
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
-        m2.metric("Var", f"{var:+.2f}".replace(".",","))
-        m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-        if data is not None and not data.empty:
-            st.line_chart(data["BET_Close"])
-        else:
-            st.write("Date indisponibile")
-    else:
-        data = simulare
-        if data is not None and not data.empty:
-            val = float(data['BET_Close'].iloc[-1])
-            prev = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val
-            var = val - prev
-            varpct = (var / prev * 100.0) if prev else 0.0
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
-            m2.metric("Var", f"{var:+.2f}".replace(".",","))
-            m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-            st.line_chart(data["BET_Close"])
-        else:
-            st.write("Date indisponibile")
-
-with col2:
-    st.subheader("Detalii actiune")
-    symbols = [r["symbol"] for r in rows_sorted]
-    sel = st.selectbox("Alege simbol", symbols)
-    row = next(r for r in rows_sorted if r["symbol"] == sel)
-    h = row["history"].copy()
-    if row.get("no_data"):
-        st.write("nu ai date de a genera raportul")
-    else:
-        h["Close"] = h["Close"].astype(float)
-        st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
-        st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
-        st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
-        st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
-        st.metric("Volum mediu 30z", value=int(row['avg_volume']))
-        st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-        st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
-        st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
+# Afișare în aplicație
+st.title("Alerte corecție tehnică")
+bet_hist = fetch_bet_data()
+mesaje = alerta_corectie_bet(bet_hist)
+for m in mesaje:
+    st.warning(m)

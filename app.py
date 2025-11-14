@@ -6,33 +6,34 @@ import yfinance as yf
 import streamlit as st
 from datetime import datetime, date
 
-# ALERTĂ DE CORECȚIE BVB
-def check_correction_alert(bet_data):
-    # Returnează o listă de alerte tehnice pe baza RSI și MACD pentru indicele BET.
-    alerts = []
-    try:
-        close = bet_data["Close"]
-        delta = close.diff()
-        up = delta.clip(lower=0)
-        down = -1 * delta.clip(upper=0)
-        ma_up = up.rolling(14).mean()
-        ma_down = down.rolling(14).mean().replace(0, 1e-9)
-        rs = ma_up / ma_down
-        rsi14 = 100 - (100 / (1 + rs))
+# ... [restul codului aplicației rămâne neschimbat] ...
 
-        ema_fast = close.ewm(span=12, adjust=False).mean()
-        ema_slow = close.ewm(span=26, adjust=False).mean()
-        macd = ema_fast - ema_slow
-        signal = macd.ewm(span=9, adjust=False).mean()
+# Funcție nouă pentru alertă de corecție pe BET
+def check_correction_alert(data, threshold_pct=2.5):
+    alert_level = ""
+    message = ""
+    if data is not None and len(data) > 2:
+        last = float(data.iloc[-1])
+        prev = float(data.iloc[-2])
+        pct_drop = ((prev - last) / prev) * 100
+        if pct_drop >= threshold_pct:
+            alert_level = "high"
+            message = f"⚠️ ALERTĂ: Posibilă corecție detectată pe BET (-{pct_drop:.2f}%)"
+        elif pct_drop >= threshold_pct / 2:
+            alert_level = "medium"
+            message = f"ℹ️ Semnal de atenție: BET a scăzut cu -{pct_drop:.2f}%"
+        else:
+            alert_level = "none"
+    return alert_level, message
 
-        latest_rsi = rsi14.iloc[-1]
-        latest_macd = macd.iloc[-1]
-        latest_signal = signal.iloc[-1]
+# Apel și afișare alertă în aplicație (de introdus înainte de st.dataframe(df))
+data_for_alert = bet_yahoo if bet_yahoo is not None else simulare
+alert_level, alert_msg = check_correction_alert(data_for_alert["BET_Close"]) if data_for_alert is not None else ("", "")
+if alert_msg:
+    st.subheader("Alerte corecție tehnică")
+    if alert_level == "high":
+        st.error(alert_msg)
+    elif alert_level == "medium":
+        st.warning(alert_msg)
 
-        if latest_rsi > 70:
-            alerts.append("⚠️ RSI semnalează o zonă de supracumpărare")
-        if latest_macd < latest_signal:
-            alerts.append("⚠️ MACD a trecut sub semnal — posibil început de corecție")
-    except Exception as e:
-        alerts.append(f"Eroare la calculul alertei: {str(e)}")
-    return alerts
+# ... [restul codului aplicației rămâne neschimbat] ...

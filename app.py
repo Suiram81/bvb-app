@@ -365,6 +365,73 @@ def compute_bet_alert(indicators):
 
     msg = "ℹ️ Niciun semnal tehnic puternic pe BET in acest moment. Piata este intr-o zona neutra."
     return "neutral", msg
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_romania_gdp_latest():
+    """Intoarce (PIB_RON, an) pentru Romania folosind World Bank API."""
+    try:
+        import requests
+        url = "https://api.worldbank.org/v2/country/ROU/indicator/NY.GDP.MKTP.CN?format=json&per_page=1"
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return None, None
+        data = r.json()
+        if not isinstance(data, list) or len(data) < 2 or not data[1]:
+            return None, None
+        item = data[1][0]
+        val = item.get("value")
+        year = item.get("date")
+        if val is None:
+            return None, None
+        try:
+            year_int = int(year)
+        except Exception:
+            year_int = None
+        return float(val), year_int
+    except Exception:
+        return None, None
+
+@st.cache_data(ttl=600, show_spinner=False)
+def compute_buffett_indicator(symbols):
+    """Calculeaza indicatorul Buffett pentru lista de simboluri BVB."""
+    gdp_ron, gdp_year = fetch_romania_gdp_latest()
+    if gdp_ron is None or gdp_ron <= 0:
+        return None, None, None, None
+
+    total_mcap = 0.0
+    used = []
+    skipped = []
+    for sym in symbols:
+        try:
+            tk = yf.Ticker(sym)
+            mcap = None
+            fi = getattr(tk, "fast_info", None)
+            if fi is not None:
+                try:
+                    if isinstance(fi, dict):
+                        mcap = fi.get("market_cap")
+                    else:
+                        mcap = getattr(fi, "market_cap", None)
+                except Exception:
+                    mcap = None
+            if not mcap:
+                info = getattr(tk, "info", None) or {}
+                mcap = info.get("marketCap")
+            if mcap and mcap > 0:
+                total_mcap += float(mcap)
+                used.append(sym)
+            else:
+                skipped.append(sym)
+        except Exception:
+            skipped.append(sym)
+
+    if total_mcap <= 0:
+        return None, None, None, None
+
+    buffett = total_mcap / float(gdp_ron) * 100.0
+    meta = {"used": used, "skipped": skipped}
+    return buffett, gdp_ron, gdp_year, meta
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
@@ -459,6 +526,22 @@ with tab_bet:
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
             m2.metric("Var", f"{var:+.2f}".replace(".",","))
             m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
+            buffett, gdp_ron, gdp_year, meta_buffett = compute_buffett_indicator(BET_CONSTITUENTS)
+            if buffett is not None:
+                if buffett < 70:
+                    zona_text = "Piata pare ieftina. Evaluari atractive pentru acumulare."
+                elif buffett <= 100:
+                    zona_text = "Zona neutra. Evaluari echilibrate."
+                else:
+                    zona_text = "Piata pare scumpa. Risc mai mare de corectie."
+                c1, c2 = st.columns([1, 2])
+                label = "Buffett Romania (BET)"
+                if gdp_year:
+                    label = f"Buffett Romania (BET, PIB {gdp_year})"
+                c1.metric(label, f"{buffett:.0f}%")
+                c2.write(zona_text)
+            else:
+                st.info("Indicatorul Buffett nu poate fi calculat acum. Date PIB indisponibile.")
             if data is not None and not data.empty:
                 st.line_chart(data["BET_Close"])
             # Alerte BET pe baza indicatorilor tehnici

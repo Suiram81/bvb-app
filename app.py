@@ -329,36 +329,31 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
 
+
 with st.sidebar:
     st.header("Setari")
     history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)
     momentum_lb = st.number_input("Lookback momentum", value=DEFAULT_SETTINGS["momentum_lookback"], step=5)
+    aero_syms_str = st.text_input("Simboluri AeRO (BETAeRO), separate prin virgula", value="")
+    aero_syms = [s.strip() for s in aero_syms_str.split(",") if s.strip()]
+
+# lista completa de simboluri: BET + ETF-uri + AeRO (introduse de dumneavoastra)
+ALL_TICKERS = BET_CONSTITUENTS + ETF_TICKERS + [s for s in aero_syms if s not in BET_CONSTITUENTS and s not in ETF_TICKERS]
 
 # date principale
-rows = fetch_all(TICKERS, int(history_days), int(momentum_lb))
+rows = fetch_all(ALL_TICKERS, int(history_days), int(momentum_lb))
 for r in rows:
     r["score"] = score_row(r)
 rows_sorted = sorted(rows, key=lambda x: (np.nan_to_num(x["score"], nan=-1e9)), reverse=True)
-rec_map = compute_recommendations([r for r in rows_sorted if not r.get("no_data")])
 
-# tabel principal
-st.subheader("Recomandari ordonate 20 companii BET + ETF-uri selectate")
-df = pd.DataFrame([{
-    "Nr": i+1,
-    "Simbol": r["symbol"],
-    "Denumire": r["name"],
-    "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
-    "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
-    "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-    "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
-    "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-    "Recomandare": rec_map.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
-    "Motiv": build_reason(r)
-} for i, r in enumerate(rows_sorted)])
-st.dataframe(df, use_container_width=True, hide_index=True)
+# impartim pe universuri
+rows_bet = [r for r in rows_sorted if r["symbol"] in BET_CONSTITUENTS]
+rows_aero = [r for r in rows_sorted if r["symbol"] in aero_syms]
+rows_etf = [r for r in rows_sorted if r["symbol"] in ETF_TICKERS]
 
-# coloane: BET + detalii actiune
-col1, col2 = st.columns([1,1])
+rec_bet = compute_recommendations([r for r in rows_bet if not r.get("no_data")])
+rec_aero = compute_recommendations([r for r in rows_aero if not r.get("no_data")]) if rows_aero else {}
+rec_etf = compute_recommendations([r for r in rows_etf if not r.get("no_data")]) if rows_etf else {}
 
 def bet_history(period="3mo", interval="1d"):
     for sym in BET_TICKERS:
@@ -371,94 +366,128 @@ def bet_history(period="3mo", interval="1d"):
             pass
     return None, "NA"
 
-with col1:
-    st.subheader("Indice BET")
-    choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=5, key="bet_period")
-    period, interval = BET_PERIODS.get(choice, ("1y","1d"))
-    bet_yahoo, _ = bet_history(period, interval)
-    simulare = compute_bet_simulare(rows_sorted, choice)
+tab_bet, tab_aero, tab_etf = st.tabs(["BET", "AeRO", "ETF-uri BVB"])
 
-    if bet_yahoo is not None and not bet_yahoo.empty:
-        yahoo_last = float(bet_yahoo['BET_Close'].iloc[-1])
-        yahoo_prev = float(bet_yahoo['BET_Close'].iloc[-2]) if len(bet_yahoo) >= 2 else yahoo_last
-        val = yahoo_last
-        var = val - yahoo_prev
-        varpct = (var / yahoo_prev * 100.0) if yahoo_prev else 0.0
-        data = simulare if simulare is not None else bet_yahoo
-        if data is not None and not data.empty:
-            scale = val / float(data['BET_Close'].iloc[-1])
-            data = data.copy()
-            data['BET_Close'] = data['BET_Close'] * scale
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
-        m2.metric("Var", f"{var:+.2f}".replace(".",","))
-        m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-        if data is not None and not data.empty:
-            st.line_chart(data["BET_Close"])
-        # Alerte BET pe baza indicatorilor tehnici
-        try:
-            bet_ind_df = data.copy()
-            bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
-            bet_ind = compute_indicators(bet_ind_df)
-            alert_type, alert_msg = compute_bet_alert(bet_ind)
-            if alert_type == "red":
-                st.error(alert_msg)
-            elif alert_type == "yellow":
-                st.warning(alert_msg)
-            elif alert_type == "green":
-                st.success(alert_msg)
-            else:
-                st.info(alert_msg)
-        except Exception:
-            st.info("Nu se poate calcula alerta tehnica pentru BET in acest moment.")
-        except Exception:
-            pass
+with tab_bet:
+    st.subheader("Recomandari BET")
+    if rows_bet:
+        df_bet = pd.DataFrame([{
+            "Nr": i+1,
+            "Simbol": r["symbol"],
+            "Denumire": r["name"],
+            "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
+            "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
+            "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
+            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
+            "Recomandare": rec_bet.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+            "Motiv": build_reason(r)
+        } for i, r in enumerate(rows_bet)])
+        st.dataframe(df_bet, use_container_width=True, hide_index=True)
     else:
-        data = simulare
+        st.write("Nu exista date pentru companiile din BET.")
+
+    col1, col2 = st.columns([1,1])
+
+    with col1:
+        st.subheader("Indice BET")
+        choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=5, key="bet_period")
+        period, interval = BET_PERIODS.get(choice, ("1y","1d"))
+        bet_yahoo, _ = bet_history(period, interval)
+        simulare = compute_bet_simulare(rows_bet, choice) if rows_bet else None
+        data = bet_yahoo if bet_yahoo is not None else simulare
         if data is not None and not data.empty:
             val = float(data['BET_Close'].iloc[-1])
             prev = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val
             var = val - prev
             varpct = (var / prev * 100.0) if prev else 0.0
+            if choice in ("3 luni", "6 luni", "1 an", "5 ani"):
+                d0 = data['BET_Close'].iloc[0]
+                if d0 != 0:
+                    scale = val / d0
+                    data = data.copy()
+                    data['BET_Close'] = data['BET_Close'] * scale
             m1, m2, m3 = st.columns(3)
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
             m2.metric("Var", f"{var:+.2f}".replace(".",","))
             m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-            st.line_chart(data["BET_Close"])
-        # Alerte BET pe baza indicatorilor tehnici
-        try:
-            bet_ind_df = data.copy()
-            bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
-            bet_ind = compute_indicators(bet_ind_df)
-            alert_type, alert_msg = compute_bet_alert(bet_ind)
-            if alert_type == "red":
-                st.error(alert_msg)
-            elif alert_type == "yellow":
-                st.warning(alert_msg)
-            elif alert_type == "green":
-                st.success(alert_msg)
-            else:
-                st.info(alert_msg)
-        except Exception:
-            st.info("Nu se poate calcula alerta tehnica pentru BET in acest moment.")
-        except Exception:
-            pass
+            if data is not None and not data.empty:
+                st.line_chart(data["BET_Close"])
+            # Alerte BET pe baza indicatorilor tehnici
+            try:
+                bet_ind_df = data.copy()
+                bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
+                bet_ind = compute_indicators(bet_ind_df)
+                alert_type, alert_msg = compute_bet_alert(bet_ind)
+                if alert_type == "red":
+                    st.error(alert_msg)
+                elif alert_type == "yellow":
+                    st.warning(alert_msg)
+                elif alert_type == "green":
+                    st.success(alert_msg)
+                else:
+                    st.info(alert_msg)
+            except Exception:
+                st.info("Nu se poate calcula alerta tehnica pentru BET in acest moment.")
+        else:
+            st.write("Nu exista suficiente date pentru a afisa graficul BET.")
 
-with col2:
-    st.subheader("Detalii actiune")
-    symbols = [r["symbol"] for r in rows_sorted]
-    sel = st.selectbox("Alege simbol", symbols)
-    row = next(r for r in rows_sorted if r["symbol"] == sel)
-    h = row["history"].copy()
-    if row.get("no_data"):
-        st.write("nu ai date de a genera raportul")
+    with col2:
+        st.subheader("Detalii actiune BET")
+        if rows_bet:
+            symbols_bet = [r["symbol"] for r in rows_bet]
+            sel = st.selectbox("Alege simbol", symbols_bet)
+            row = next(r for r in rows_bet if r["symbol"] == sel)
+            h = row["history"].copy()
+            if row.get("no_data"):
+                st.write("nu ai date de a genera raportul")
+            else:
+                h["Close"] = h["Close"].astype(float)
+                st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
+                st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
+                st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
+                st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
+                st.metric("Volum mediu 30z", value=int(row['avg_volume']))
+                st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
+                st.metric("Ex date", value=(row.get('last_div_date') or "-"))
+                st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
+        else:
+            st.write("Nu exista companii BET in lista curenta.")
+
+with tab_aero:
+    st.subheader("Recomandari AeRO (BETAeRO)")
+    if rows_aero:
+        df_aero = pd.DataFrame([{
+            "Nr": i+1,
+            "Simbol": r["symbol"],
+            "Denumire": r["name"],
+            "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
+            "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
+            "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
+            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
+            "Recomandare": rec_aero.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+            "Motiv": build_reason(r)
+        } for i, r in enumerate(rows_aero)])
+        st.dataframe(df_aero, use_container_width=True, hide_index=True)
     else:
-        h["Close"] = h["Close"].astype(float)
-        st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
-        st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
-        st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
-        st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
-        st.metric("Volum mediu 30z", value=int(row['avg_volume']))
-        st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-        st.metric("Ex date", value=(row.get('last_div_date') or "-"))
-        st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
+        st.write("Introduceti simbolurile AeRO in stanga pentru a vedea recomandarile.")
+
+with tab_etf:
+    st.subheader("Recomandari ETF-uri BVB")
+    if rows_etf:
+        df_etf = pd.DataFrame([{
+            "Nr": i+1,
+            "Simbol": r["symbol"],
+            "Denumire": r["name"],
+            "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
+            "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
+            "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
+            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
+            "Recomandare": rec_etf.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+            "Motiv": build_reason(r)
+        } for i, r in enumerate(rows_etf)])
+        st.dataframe(df_etf, use_container_width=True, hide_index=True)
+    else:
+        st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")

@@ -8,7 +8,7 @@ import streamlit as st
 from datetime import datetime, date
 
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
-BET_TICKERS = ["^BET.RO","^BETI","^BET"]
+BET_TICKERS = ["^BETI","^BET","^BET.RO"]
 BET_DISPLAY_SCALE = 176.0  # factor ad-hoc pentru a apropia valorile de nivelul oficial BET
 
 BET_CONSTITUENTS = [

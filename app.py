@@ -298,6 +298,34 @@ def compute_recommendations(rows_sorted):
         rec_map[r["symbol"]] = rec
     return rec_map
 
+def compute_bet_alert(indicators):
+    rsi = indicators.get("rsi14_last")
+    macd = indicators.get("macd_last")
+    sig = indicators.get("signal_last")
+    sma50 = indicators.get("sma50_last")
+    sma200 = indicators.get("sma200_last")
+
+    values = [rsi, macd, sig, sma50, sma200]
+    if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values):
+        return None, None
+
+    red = (rsi > 70) and (macd < sig) and (sma50 < sma200)
+    yellow = (60 <= rsi <= 70) and (abs(macd - sig) < 0.1) and (abs(sma50 - sma200) / max(abs(sma200), 1e-9) < 0.02)
+    green = (40 <= rsi < 70) and (macd > sig) and (sma50 > sma200)
+
+    if red:
+        msg = "🔴 Atenție: Posibil început de corecție pe BVB. RSI peste 70, MACD sub semnal și SMA50 sub SMA200. Fiți prudenți."
+        return "red", msg
+    if yellow:
+        msg = "🟡 Volatilitate ridicată pe BVB. RSI între 60 și 70, MACD aproape de semnal și SMA50 foarte aproape de SMA200. Atenție la intrările noi."
+        return "yellow", msg
+    if green:
+        msg = "🟢 Trend pozitiv confirmat pe BVB. RSI între 40 și 70, MACD peste semnal și SMA50 peste SMA200. Condiții tehnice bune pentru acumulare."
+        return "green", msg
+
+    return None, None
+
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
@@ -368,6 +396,20 @@ with col1:
         m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
         if data is not None and not data.empty:
             st.line_chart(data["BET_Close"])
+        # Alerte BET pe baza indicatorilor tehnici
+        try:
+            bet_ind_df = data.copy()
+            bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
+            bet_ind = compute_indicators(bet_ind_df)
+            alert_type, alert_msg = compute_bet_alert(bet_ind)
+            if alert_type == "red":
+                st.error(alert_msg)
+            elif alert_type == "yellow":
+                st.warning(alert_msg)
+            elif alert_type == "green":
+                st.success(alert_msg)
+        except Exception:
+            pass
         else:
             st.write("Date indisponibile")
     else:
@@ -382,6 +424,20 @@ with col1:
             m2.metric("Var", f"{var:+.2f}".replace(".",","))
             m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
             st.line_chart(data["BET_Close"])
+        # Alerte BET pe baza indicatorilor tehnici
+        try:
+            bet_ind_df = data.copy()
+            bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
+            bet_ind = compute_indicators(bet_ind_df)
+            alert_type, alert_msg = compute_bet_alert(bet_ind)
+            if alert_type == "red":
+                st.error(alert_msg)
+            elif alert_type == "yellow":
+                st.warning(alert_msg)
+            elif alert_type == "green":
+                st.success(alert_msg)
+        except Exception:
+            pass
         else:
             st.write("Date indisponibile")
 

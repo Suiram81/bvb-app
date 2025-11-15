@@ -8,8 +8,7 @@ import streamlit as st
 from datetime import datetime, date
 
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
-BET_TICKERS = ["^BETI","^BET","^BET.RO"]
-BET_DISPLAY_SCALE = 176.0  # factor ad-hoc pentru a apropia valorile de nivelul oficial BET
+BET_TICKERS = ["^BETI","^BET"]
 
 BET_CONSTITUENTS = [
     "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
@@ -532,12 +531,12 @@ with tab_bet:
         simulare = compute_bet_simulare(rows_bet, choice) if rows_bet else None
         data = bet_yahoo if bet_yahoo is not None else simulare
         if data is not None and not data.empty:
-            serie = data["BET_Close"] * BET_DISPLAY_SCALE
-            val = float(serie.iloc[-1])
-            prev = float(serie.iloc[-2]) if len(serie) >= 2 else val
+            val = float(data['BET_Close'].iloc[-1])
+            prev = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val
             var = val - prev
             varpct = (var / prev * 100.0) if prev else 0.0
-            # BET_DISPLAY_SCALE apropie nivelul afisat de valorile din platformele locale
+            # nu mai rescalam seria BET_Close; folosim valorile asa cum sunt din sursa
+
 
 
 
@@ -564,15 +563,14 @@ with tab_bet:
                 st.info("Indicatorul Buffett nu poate fi calculat acum. Date PIB indisponibile.")
             if data is not None and not data.empty:
                 df_bet = data.reset_index().rename(columns={data.index.name or 'index': 'Date'})
-                df_bet['BET_Close_scaled'] = df_bet['BET_Close'] * BET_DISPLAY_SCALE
-                y_min = float(df_bet['BET_Close_scaled'].min()) * 0.98
-                y_max = float(df_bet['BET_Close_scaled'].max()) * 1.02
+                y_min = float(df_bet['BET_Close'].min()) * 0.95
+                y_max = float(df_bet['BET_Close'].max()) * 1.05
                 chart = (
                     alt.Chart(df_bet)
                     .mark_line()
                     .encode(
                         x='Date:T',
-                        y=alt.Y('BET_Close_scaled:Q', scale=alt.Scale(domain=[y_min, y_max]))
+                        y=alt.Y('BET_Close:Q', scale=alt.Scale(domain=[y_min, y_max]))
                     )
                 )
                 st.altair_chart(chart, use_container_width=True)

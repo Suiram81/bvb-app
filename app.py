@@ -6,6 +6,19 @@ import yfinance as yf
 import streamlit as st
 from datetime import datetime, date
 
+def format_ro_date(d):
+    if not d:
+        return ""
+    try:
+        if isinstance(d, (date, datetime)):
+            dt = d
+        else:
+            dt = datetime.fromisoformat(str(d))
+        return dt.strftime("%d/%m/%Y")
+    except Exception:
+        return str(d)
+
+
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
 
 BET_TICKERS = ["^BETI","^BET"]
@@ -131,6 +144,7 @@ def fetch_symbol(sym, history_days, momentum_lookback):
         last_dividend = None
         last_div_date = None
         last_div_net_pct = None
+        last_pay_date = None
         if dividends is not None and not dividends.empty:
             try:
                 last_dividend = float(dividends.iloc[-1])
@@ -140,6 +154,37 @@ def fetch_symbol(sym, history_days, momentum_lookback):
                     last_div_net_pct = float(last_dividend * net_rate / float(price_now) * 100.0)
             except Exception:
                 pass
+        # incercam sa obtinem si data platii dividendului din calendarul Yahoo
+        try:
+            cal = getattr(tk, 'calendar', None)
+            if cal is None:
+                try:
+                    cal = tk.get_calendar()
+                except Exception:
+                    cal = None
+            if cal is not None:
+                if isinstance(cal, dict):
+                    div_ts = cal.get('dividendDate') or cal.get('dividend_date')
+                else:
+                    div_ts = getattr(cal, 'get', lambda k, default=None: None)('dividendDate')
+                if div_ts:
+                    try:
+                        # Yahoo poate intoarce timestamp in secunde sau numpy.datetime64
+                        import numpy as _np
+                        if isinstance(div_ts, (int, float)):
+                            dt_pay = datetime.fromtimestamp(div_ts).date()
+                        elif isinstance(div_ts, (_np.datetime64,)):
+                            dt_pay = _np.datetime_as_string(div_ts, unit='D')
+                            dt_pay = datetime.fromisoformat(str(dt_pay)).date()
+                        else:
+                            dt_pay = None
+                        if dt_pay is not None:
+                            last_pay_date = dt_pay.isoformat()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
 
         name = info.get("shortName", sym)
 
@@ -155,6 +200,7 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             "yield": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_dividend_net_pct": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_div_date": last_div_date,
+            "last_pay_date": last_pay_date,
             "history": hist.reset_index()
         }
     except Exception:
@@ -184,6 +230,7 @@ def fetch_all(tickers, history_days, momentum_lookback):
                     "last_dividend_net_pct": None,
                     "last_div_date": None,
                     "history": pd.DataFrame(),
+                    "last_pay_date": None,
                     "no_data": True
                 })
     return out
@@ -515,7 +562,8 @@ with tab_bet:
             "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
             "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Ex date": format_ro_date(r.get("last_div_date")) if r.get("last_div_date") else "",
+            "Data plata dividend": format_ro_date(r.get("last_pay_date")) if r.get("last_pay_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
@@ -601,8 +649,9 @@ with tab_bet:
                 st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
                 st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
                 st.metric("Volum mediu 30z", value=int(row['avg_volume']))
-                st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-                st.metric("Ex date", value=(row.get('last_div_date') or "-"))
+                st.metric("Ultimul dividend net %", value=(f"{row.get('last_dividend_net_pct'):.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
+                st.metric("Ex date", value=(format_ro_date(row.get('last_div_date')) if row.get('last_div_date') else "-"))
+                st.metric("Data plata dividend", value=(format_ro_date(row.get('last_pay_date')) if row.get('last_pay_date') else "-"))
                 st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
         else:
             st.write("Nu exista companii BET in lista curenta.")
@@ -617,7 +666,8 @@ with tab_aero:
             "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
             "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Ex date": format_ro_date(r.get("last_div_date")) if r.get("last_div_date") else "",
+            "Data plata dividend": format_ro_date(r.get("last_pay_date")) if r.get("last_pay_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
@@ -634,9 +684,9 @@ with tab_etf:
             "Simbol": r["symbol"],
             "Denumire": r["name"],
             "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
-            "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Ex date": format_ro_date(r.get("last_div_date")) if r.get("last_div_date") else "",
+            "Data plata dividend": format_ro_date(r.get("last_pay_date")) if r.get("last_pay_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)

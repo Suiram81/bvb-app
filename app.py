@@ -3,6 +3,7 @@ import time
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import altair as alt
 import streamlit as st
 from datetime import datetime, date
 
@@ -565,7 +566,18 @@ with tab_bet:
             else:
                 st.info("Indicatorul Buffett nu poate fi calculat acum. Date PIB indisponibile.")
             if data is not None and not data.empty:
-                st.line_chart(data["BET_Close"])
+                df_bet = data.reset_index().rename(columns={data.index.name or 'index': 'Date'})
+                y_min = float(df_bet['BET_Close'].min()) * 0.95
+                y_max = float(df_bet['BET_Close'].max()) * 1.05
+                chart = (
+                    alt.Chart(df_bet)
+                    .mark_line()
+                    .encode(
+                        x='Date:T',
+                        y=alt.Y('BET_Close:Q', scale=alt.Scale(domain=[y_min, y_max]))
+                    )
+                )
+                st.altair_chart(chart, use_container_width=True)
             # Alerte BET pe baza indicatorilor tehnici
             try:
                 bet_ind_df = data.copy()

@@ -307,25 +307,24 @@ def compute_bet_alert(indicators):
 
     values = [rsi, macd, sig, sma50, sma200]
     if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values):
-        return None, None
+        return None, "Nu exista suficiente date pentru a calcula semnalul tehnic pe BET."
 
-    red = (rsi > 70) and (macd < sig) and (sma50 < sma200)
-    yellow = (60 <= rsi <= 70) and (abs(macd - sig) < 0.1) and (abs(sma50 - sma200) / max(abs(sma200), 1e-9) < 0.02)
-    green = (40 <= rsi < 70) and (macd > sig) and (sma50 > sma200)
+    red = (rsi is not None and rsi > 70) and (macd is not None and sig is not None and macd < sig) and (sma50 is not None and sma200 is not None and sma50 < sma200)
+    yellow = (rsi is not None and 60 <= rsi <= 70) and (macd is not None and sig is not None and abs(macd - sig) < 0.1) and (sma50 is not None and sma200 is not None and abs(sma50 - sma200) / max(abs(sma200), 1e-9) < 0.02)
+    green = (rsi is not None and 40 <= rsi < 70) and (macd is not None and sig is not None and macd > sig) and (sma50 is not None and sma200 is not None and sma50 > sma200)
 
     if red:
-        msg = "🔴 Atenție: Posibil început de corecție pe BVB. RSI peste 70, MACD sub semnal și SMA50 sub SMA200. Fiți prudenți."
+        msg = "🔴 Atentie: Posibil inceput de corectie pe BET. RSI peste 70, MACD sub semnal si SMA50 sub SMA200. Fiti prudent."
         return "red", msg
     if yellow:
-        msg = "🟡 Volatilitate ridicată pe BVB. RSI între 60 și 70, MACD aproape de semnal și SMA50 foarte aproape de SMA200. Atenție la intrările noi."
+        msg = "🟡 Volatilitate ridicata pe BET. RSI intre 60 si 70, MACD aproape de semnal si SMA50 foarte aproape de SMA200. Atentie la intrarile noi."
         return "yellow", msg
     if green:
-        msg = "🟢 Trend pozitiv confirmat pe BVB. RSI între 40 și 70, MACD peste semnal și SMA50 peste SMA200. Condiții tehnice bune pentru acumulare."
+        msg = "🟢 Trend pozitiv confirmat pe BET. RSI intre 40 si 70, MACD peste semnal si SMA50 peste SMA200. Conditii tehnice bune pentru acumulare."
         return "green", msg
 
-    return None, None
-
-
+    msg = "ℹ️ Niciun semnal tehnic puternic pe BET in acest moment. Piata este intr-o zona neutra."
+    return "neutral", msg
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
@@ -408,6 +407,10 @@ with col1:
                 st.warning(alert_msg)
             elif alert_type == "green":
                 st.success(alert_msg)
+            else:
+                st.info(alert_msg)
+        except Exception:
+            st.info("Nu se poate calcula alerta tehnica pentru BET in acest moment.")
         except Exception:
             pass
     else:
@@ -434,6 +437,10 @@ with col1:
                 st.warning(alert_msg)
             elif alert_type == "green":
                 st.success(alert_msg)
+            else:
+                st.info(alert_msg)
+        except Exception:
+            st.info("Nu se poate calcula alerta tehnica pentru BET in acest moment.")
         except Exception:
             pass
 

@@ -85,6 +85,59 @@ def net_rate_for_date(dstr):
         d = date.today()
     return 0.84 if d >= TAX_SWITCHOVER else 0.92
 
+def fmt_date_dmy(dstr):
+    """Intoarce data in format ZZ/LL/AAAA pentru afisare."""
+    if not dstr:
+        return ""
+    try:
+        d = pd.to_datetime(dstr).date()
+        return d.strftime("%d/%m/%Y")
+    except Exception:
+        return str(dstr)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_last_pay_date(sym):
+    """Intoarce data platii ultimului dividend pentru simbol, daca exista.
+
+    Foloseste pagina StockAnalysis dividend pentru BVB, daca este disponibila.
+    """
+    try:
+        import requests
+        base = sym.replace(".RO", "").replace(".ro", "")
+        url = f"https://stockanalysis.com/quote/bvb/{base}/dividend/"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, timeout=10, headers=headers)
+        if r.status_code != 200:
+            return None
+        tables = pd.read_html(r.text)
+        if not tables:
+            return None
+        df = tables[0]
+        if "Pay Date" not in df.columns:
+            return None
+        val = df["Pay Date"].iloc[0]
+        d = pd.to_datetime(val).date()
+        return d.isoformat()
+    except Exception:
+        return None
+
+def color_date_cell(val):
+    """Coloreaza datele trecute in gri si pe cele viitoare in verde deschis."""
+    if not val:
+        return ""
+    try:
+        d = pd.to_datetime(val, dayfirst=True).date()
+    except Exception:
+        try:
+            d = pd.to_datetime(val).date()
+        except Exception:
+            return ""
+    today = date.today()
+    if d < today:
+        return "background-color: #e0e0e0"
+    else:
+        return "background-color: #d4edda"
+
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_symbol(sym, history_days, momentum_lookback):
     try:
@@ -143,6 +196,9 @@ def fetch_symbol(sym, history_days, momentum_lookback):
 
         name = info.get("shortName", sym)
 
+        last_pay_date = fetch_last_pay_date(sym) if last_div_date is not None else None
+
+
         return {
             "symbol": sym,
             "name": name,
@@ -155,6 +211,7 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             "yield": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_dividend_net_pct": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_div_date": last_div_date,
+            "last_pay_date": last_pay_date,
             "history": hist.reset_index()
         }
     except Exception:
@@ -183,6 +240,7 @@ def fetch_all(tickers, history_days, momentum_lookback):
                     "yield": None,
                     "last_dividend_net_pct": None,
                     "last_div_date": None,
+                    "last_pay_date": None,
                     "history": pd.DataFrame(),
                     "no_data": True
                 })
@@ -508,6 +566,7 @@ tab_bet, tab_aero, tab_etf = st.tabs(["BET", "AeRO", "ETF-uri BVB"])
 with tab_bet:
     st.subheader("Recomandari BET")
     if rows_bet:
+
         df_bet = pd.DataFrame([{
             "Nr": i+1,
             "Simbol": r["symbol"],
@@ -515,12 +574,14 @@ with tab_bet:
             "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
             "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Ex date": fmt_date_dmy(r.get("last_div_date")) if r.get("last_div_date") else "",
+            "Data plata dividend": fmt_date_dmy(r.get("last_pay_date")) if r.get("last_pay_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
-        st.dataframe(df_bet, use_container_width=True, hide_index=True)
+        df_bet_style = df_bet.style.applymap(color_date_cell, subset=["Ex date","Data plata dividend"])
+        st.dataframe(df_bet_style, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista date pentru companiile din BET.")
 
@@ -602,7 +663,8 @@ with tab_bet:
                 st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
                 st.metric("Volum mediu 30z", value=int(row['avg_volume']))
                 st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-                st.metric("Ex date", value=(row.get('last_div_date') or "-"))
+                st.metric("Ex date", value=(fmt_date_dmy(row.get('last_div_date')) or "-"))
+                st.metric("Plata dividend", value=(fmt_date_dmy(row.get('last_pay_date')) or "-"))
                 st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
         else:
             st.write("Nu exista companii BET in lista curenta.")
@@ -610,6 +672,7 @@ with tab_bet:
 with tab_aero:
     st.subheader("Recomandari AeRO (BETAeRO)")
     if rows_aero:
+
         df_aero = pd.DataFrame([{
             "Nr": i+1,
             "Simbol": r["symbol"],
@@ -617,18 +680,21 @@ with tab_aero:
             "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
             "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Ex date": fmt_date_dmy(r.get("last_div_date")) if r.get("last_div_date") else "",
+            "Data plata dividend": fmt_date_dmy(r.get("last_pay_date")) if r.get("last_pay_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
-        st.dataframe(df_aero, use_container_width=True, hide_index=True)
+        df_aero_style = df_aero.style.applymap(color_date_cell, subset=["Ex date","Data plata dividend"])
+        st.dataframe(df_aero_style, use_container_width=True, hide_index=True)
     else:
         st.write("Introduceti simbolurile AeRO in stanga pentru a vedea recomandarile.")
 
 with tab_etf:
     st.subheader("Recomandari ETF-uri BVB")
     if rows_etf:
+
         df_etf = pd.DataFrame([{
             "Nr": i+1,
             "Simbol": r["symbol"],
@@ -636,11 +702,13 @@ with tab_etf:
             "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
             "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-            "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
+            "Ex date": fmt_date_dmy(r.get("last_div_date")) if r.get("last_div_date") else "",
+            "Data plata dividend": fmt_date_dmy(r.get("last_pay_date")) if r.get("last_pay_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
-        st.dataframe(df_etf, use_container_width=True, hide_index=True)
+        df_etf_style = df_etf.style.applymap(color_date_cell, subset=["Ex date","Data plata dividend"])
+        st.dataframe(df_etf_style, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")

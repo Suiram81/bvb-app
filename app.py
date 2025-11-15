@@ -350,7 +350,7 @@ df = pd.DataFrame([{
     "Pret": round(r["price"],2) if r["price"] is not None else np.nan,
     "Delta zi %": round(r["day_change"],2) if not r.get("no_data") else np.nan,
     "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
-    "Data dividend": r.get("last_div_date") if r.get("last_div_date") else "",
+    "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
     "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
     "Recomandare": rec_map.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
     "Motiv": build_reason(r)
@@ -460,5 +460,5 @@ with col2:
         st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
         st.metric("Volum mediu 30z", value=int(row['avg_volume']))
         st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
-        st.metric("Data dividend", value=(row.get('last_div_date') or "-"))
+        st.metric("Ex date", value=(row.get('last_div_date') or "-"))
         st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])

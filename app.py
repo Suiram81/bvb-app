@@ -332,7 +332,7 @@ def compute_recommendations(rows_sorted):
         elif v_text == "De evitat acum" and s < q25:
             rec = "Vinde"
         else:
-            rec = "Evalueaza"
+            rec = "🔍 Insuficiente date pentru a face analiza"
         if r["symbol"] in USER_PORTFOLIO and rec == "Cumpara":
             rec = "Mentine"
         rec_map[r["symbol"]] = rec
@@ -517,7 +517,7 @@ with tab_bet:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-            "Recomandare": rec_bet.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+            "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
         st.dataframe(df_bet, use_container_width=True, hide_index=True)
@@ -619,7 +619,7 @@ with tab_aero:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-            "Recomandare": rec_aero.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+            "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
         st.dataframe(df_aero, use_container_width=True, hide_index=True)
@@ -638,7 +638,7 @@ with tab_etf:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-            "Recomandare": rec_etf.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
+            "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
         st.dataframe(df_etf, use_container_width=True, hide_index=True)

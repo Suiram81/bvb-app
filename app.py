@@ -332,7 +332,7 @@ def compute_recommendations(rows_sorted):
         elif v_text == "De evitat acum" and s < q25:
             rec = "Vinde"
         else:
-            rec = "🔍 Insuficiente date pentru a face analiza"
+            rec = "Evalueaza"
         if r["symbol"] in USER_PORTFOLIO and rec == "Cumpara":
             rec = "Mentine"
         rec_map[r["symbol"]] = rec
@@ -365,95 +365,6 @@ def compute_bet_alert(indicators):
 
     msg = "ℹ️ Niciun semnal tehnic puternic pe BET in acest moment. Piata este intr-o zona neutra."
     return "neutral", msg
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_romania_gdp_latest():
-    """Intoarce (PIB_RON, perioada_label) pentru Romania folosind Eurostat, PIB trimestrial nominal in moneda nationala.
-
-    Sursa: Eurostat, dataset namq_10_gdp, indicator B1GQ, unit CP_MNAC (mil. moneda nationala, preturi curente).
-    """
-    try:
-        import requests
-        url = (
-            "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/"
-            "namq_10_gdp?geo=RO&na_item=B1GQ&unit=CP_MNAC&lastTimePeriod=1"
-        )
-        r = requests.get(url, timeout=10)
-        if r.status_code != 200:
-            return None, None
-        data = r.json()
-        vals = data.get("value", {})
-        if not vals:
-            return None, None
-        # luam singura observatie intoarsa (ultimul trimestru disponibil)
-        idx_str, val_mn = next(iter(vals.items()))
-        try:
-            idx_int = int(idx_str)
-        except Exception:
-            idx_int = None
-        dim_time = data.get("dimension", {}).get("time", {}).get("category", {})
-        labels = dim_time.get("label", {})
-        index_map = dim_time.get("index", {})
-        period_label = None
-        if idx_int is not None and index_map:
-            for lab, pos in index_map.items():
-                if pos == idx_int:
-                    period_label = lab
-                    break
-        if period_label is None and labels:
-            # fallback, luam primul label
-            period_label = list(labels.keys())[0]
-        # valorile sunt in milioane moneda nationala
-        try:
-            gdp_ron = float(val_mn) * 1_000_000.0
-        except Exception:
-            return None, None
-        return gdp_ron, period_label
-    except Exception:
-        return None, None
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def compute_buffett_indicator(symbols):
-    """Calculeaza indicatorul Buffett pentru lista de simboluri BVB."""
-    gdp_ron, gdp_period = fetch_romania_gdp_latest()
-    if gdp_ron is None or gdp_ron <= 0:
-        return None, None, None, None
-
-    total_mcap = 0.0
-    used = []
-    skipped = []
-    for sym in symbols:
-        try:
-            tk = yf.Ticker(sym)
-            mcap = None
-            fi = getattr(tk, "fast_info", None)
-            if fi is not None:
-                try:
-                    if isinstance(fi, dict):
-                        mcap = fi.get("market_cap")
-                    else:
-                        mcap = getattr(fi, "market_cap", None)
-                except Exception:
-                    mcap = None
-            if not mcap:
-                info = getattr(tk, "info", None) or {}
-                mcap = info.get("marketCap")
-            if mcap and mcap > 0:
-                total_mcap += float(mcap)
-                used.append(sym)
-            else:
-                skipped.append(sym)
-        except Exception:
-            skipped.append(sym)
-
-    if total_mcap <= 0:
-        return None, None, None, None
-
-    buffett = total_mcap / float(gdp_ron) * 100.0
-    meta = {"used": used, "skipped": skipped}
-    return buffett, gdp_ron, gdp_period, meta
-
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
 st.title("BVB Recommender")
@@ -517,7 +428,7 @@ with tab_bet:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-            "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_bet.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
         st.dataframe(df_bet, use_container_width=True, hide_index=True)
@@ -548,22 +459,6 @@ with tab_bet:
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
             m2.metric("Var", f"{var:+.2f}".replace(".",","))
             m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-            buffett, gdp_ron, gdp_period, meta_buffett = compute_buffett_indicator(BET_CONSTITUENTS)
-            if buffett is not None:
-                if buffett < 70:
-                    zona_text = "Piata pare ieftina. Evaluari atractive pentru acumulare."
-                elif buffett <= 100:
-                    zona_text = "Zona neutra. Evaluari echilibrate."
-                else:
-                    zona_text = "Piata pare scumpa. Risc mai mare de corectie."
-                c1, c2 = st.columns([1, 2])
-                label = "Buffett Romania (BET)"
-                if gdp_period:
-                    label = f"Buffett Romania (BET, PIB {gdp_period})"
-                c1.metric(label, f"{buffett:.0f}%")
-                c2.write(zona_text)
-            else:
-                st.info("Indicatorul Buffett nu poate fi calculat acum. Date PIB indisponibile.")
             if data is not None and not data.empty:
                 st.line_chart(data["BET_Close"])
             # Alerte BET pe baza indicatorilor tehnici
@@ -619,7 +514,7 @@ with tab_aero:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-            "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_aero.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
         st.dataframe(df_aero, use_container_width=True, hide_index=True)
@@ -638,7 +533,7 @@ with tab_etf:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
-            "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_etf.get(r["symbol"], "Evalueaza") if not r.get("no_data") else "Evalueaza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
         st.dataframe(df_etf, use_container_width=True, hide_index=True)

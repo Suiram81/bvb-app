@@ -368,33 +368,55 @@ def compute_bet_alert(indicators):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_romania_gdp_latest():
-    """Intoarce (PIB_RON, an) pentru Romania folosind World Bank API."""
+    """Intoarce (PIB_RON, perioada_label) pentru Romania folosind Eurostat, PIB trimestrial nominal in moneda nationala.
+
+    Sursa: Eurostat, dataset namq_10_gdp, indicator B1GQ, unit CP_MNAC (mil. moneda nationala, preturi curente).
+    """
     try:
         import requests
-        url = "https://api.worldbank.org/v2/country/ROU/indicator/NY.GDP.MKTP.CN?format=json&per_page=1"
+        url = (
+            "https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/"
+            "namq_10_gdp?geo=RO&na_item=B1GQ&unit=CP_MNAC&lastTimePeriod=1"
+        )
         r = requests.get(url, timeout=10)
         if r.status_code != 200:
             return None, None
         data = r.json()
-        if not isinstance(data, list) or len(data) < 2 or not data[1]:
+        vals = data.get("value", {})
+        if not vals:
             return None, None
-        item = data[1][0]
-        val = item.get("value")
-        year = item.get("date")
-        if val is None:
-            return None, None
+        # luam singura observatie intoarsa (ultimul trimestru disponibil)
+        idx_str, val_mn = next(iter(vals.items()))
         try:
-            year_int = int(year)
+            idx_int = int(idx_str)
         except Exception:
-            year_int = None
-        return float(val), year_int
+            idx_int = None
+        dim_time = data.get("dimension", {}).get("time", {}).get("category", {})
+        labels = dim_time.get("label", {})
+        index_map = dim_time.get("index", {})
+        period_label = None
+        if idx_int is not None and index_map:
+            for lab, pos in index_map.items():
+                if pos == idx_int:
+                    period_label = lab
+                    break
+        if period_label is None and labels:
+            # fallback, luam primul label
+            period_label = list(labels.keys())[0]
+        # valorile sunt in milioane moneda nationala
+        try:
+            gdp_ron = float(val_mn) * 1_000_000.0
+        except Exception:
+            return None, None
+        return gdp_ron, period_label
     except Exception:
         return None, None
+
 
 @st.cache_data(ttl=600, show_spinner=False)
 def compute_buffett_indicator(symbols):
     """Calculeaza indicatorul Buffett pentru lista de simboluri BVB."""
-    gdp_ron, gdp_year = fetch_romania_gdp_latest()
+    gdp_ron, gdp_period = fetch_romania_gdp_latest()
     if gdp_ron is None or gdp_ron <= 0:
         return None, None, None, None
 
@@ -430,7 +452,7 @@ def compute_buffett_indicator(symbols):
 
     buffett = total_mcap / float(gdp_ron) * 100.0
     meta = {"used": used, "skipped": skipped}
-    return buffett, gdp_ron, gdp_year, meta
+    return buffett, gdp_ron, gdp_period, meta
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -526,7 +548,7 @@ with tab_bet:
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
             m2.metric("Var", f"{var:+.2f}".replace(".",","))
             m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
-            buffett, gdp_ron, gdp_year, meta_buffett = compute_buffett_indicator(BET_CONSTITUENTS)
+            buffett, gdp_ron, gdp_period, meta_buffett = compute_buffett_indicator(BET_CONSTITUENTS)
             if buffett is not None:
                 if buffett < 70:
                     zona_text = "Piata pare ieftina. Evaluari atractive pentru acumulare."
@@ -536,8 +558,8 @@ with tab_bet:
                     zona_text = "Piata pare scumpa. Risc mai mare de corectie."
                 c1, c2 = st.columns([1, 2])
                 label = "Buffett Romania (BET)"
-                if gdp_year:
-                    label = f"Buffett Romania (BET, PIB {gdp_year})"
+                if gdp_period:
+                    label = f"Buffett Romania (BET, PIB {gdp_period})"
                 c1.metric(label, f"{buffett:.0f}%")
                 c2.write(zona_text)
             else:

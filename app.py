@@ -8,7 +8,7 @@ import streamlit as st
 from datetime import datetime, date
 
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
-
+BET_TICKERS = ["^BET.RO","^BETI","^BET"]
 BET_TICKERS = ["^BETI","^BET"]
 
 BET_CONSTITUENTS = [
@@ -465,12 +465,9 @@ with st.sidebar:
     st.header("Setari")
     history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)
     momentum_lb = st.number_input("Lookback momentum", value=DEFAULT_SETTINGS["momentum_lookback"], step=5)
-    aero_extra_str = st.text_input("Simboluri AeRO suplimentare, separate prin virgula", value="")
-    aero_extra = [s.strip() for s in aero_extra_str.split(",") if s.strip()]
-    aero_syms = AERO_TICKERS + [s for s in aero_extra if s not in AERO_TICKERS and s not in BET_CONSTITUENTS and s not in ETF_TICKERS]
 
-# lista completa de simboluri: BET + ETF-uri + AeRO
-ALL_TICKERS = BET_CONSTITUENTS + ETF_TICKERS + [s for s in aero_syms if s not in BET_CONSTITUENTS and s not in ETF_TICKERS]
+# lista completa de simboluri: BET + ETF-uri + AeRO standard
+ALL_TICKERS = BET_CONSTITUENTS + ETF_TICKERS + AERO_TICKERS
 
 # date principale
 rows = fetch_all(ALL_TICKERS, int(history_days), int(momentum_lb))
@@ -539,12 +536,12 @@ with tab_bet:
             prev = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val
             var = val - prev
             varpct = (var / prev * 100.0) if prev else 0.0
-            if choice in ("3 luni", "6 luni", "1 an", "5 ani"):
-                d0 = data['BET_Close'].iloc[0]
-                if d0 != 0:
-                    scale = val / d0
-                    data = data.copy()
-                    data['BET_Close'] = data['BET_Close'] * scale
+            # nu mai rescalam seria BET_Close; folosim valorile asa cum sunt din sursa
+
+
+
+
+
             m1, m2, m3 = st.columns(3)
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
             m2.metric("Var", f"{var:+.2f}".replace(".",","))

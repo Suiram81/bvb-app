@@ -483,7 +483,7 @@ rows_sorted = sorted(rows, key=lambda x: (np.nan_to_num(x["score"], nan=-1e9)), 
 
 # impartim pe universuri
 rows_bet = [r for r in rows_sorted if r["symbol"] in BET_CONSTITUENTS]
-rows_aero = [r for r in rows_sorted if r["symbol"] in aero_syms]
+rows_aero = [r for r in rows_sorted if r["symbol"] in AERO_TICKERS]
 rows_etf = [r for r in rows_sorted if r["symbol"] in ETF_TICKERS]
 
 rec_bet = compute_recommendations([r for r in rows_bet if not r.get("no_data")])
@@ -633,7 +633,7 @@ with tab_aero:
         } for i, r in enumerate(rows_aero)])
         st.dataframe(df_aero, use_container_width=True, hide_index=True)
     else:
-        st.write("Introduceti simbolurile AeRO in stanga pentru a vedea recomandarile.")
+        st.write("Nu exista companii AeRO de afisat in configuratia curenta.")
 
 with tab_etf:
     st.subheader("Recomandari ETF-uri BVB")

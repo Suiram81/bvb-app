@@ -16,9 +16,49 @@ BET_CONSTITUENTS = [
     "EL.RO","SFG.RO","TRP.RO","TTS.RO"
 ]
 
+
+
+AERO_CONSTITUENTS = {
+    "DN.RO": "DN Agrar Group",
+    "CMVX.RO": "COMVEX SA CONSTANTA",
+    "BUCU.RO": "BUCUR OBOR SA BUCURESTI",
+    "MET.RO": "META ESTATE TRUST",
+    "AG.RO": "AGROLAND BUSINESS SYSTEM",
+    "SCDM.RO": "UNIREA SHOPPING CENTER SA BUCURESTI",
+    "IPRU.RO": "IPROEB SA BISTRITA",
+    "MACO.RO": "MACOFIL SA TG. JIU",
+    "FOJE.RO": "FORAJ SONDE SA VIDELE",
+    "BENTO.RO": "2B Intelligent Soft",
+    "PRSN.RO": "PROSPECTIUNI SA BUCURESTI",
+    "HAI.RO": "Holde Agri Invest S.A. - Clasa A",
+    "BUCV.RO": "BUCUR SA BUCURESTI",
+    "GSH.RO": "Grup Serban Holding",
+    "NRF.RO": "NOROFERT S.A.",
+    "CC.RO": "CONNECTIONS CONSULT S.A.",
+    "ASC.RO": "ASCENDIA S.A.",
+    "JTG.RO": "JT GRUP OIL",
+    "ALW.RO": "VISUAL FAN",
+    "AST.RO": "ARCTIC STREAM",
+    "AGRO.RO": "AGROSERV MARIUTA",
+    "MIBO.RO": "Millenium Insurance Broker",
+    "ATRD.RO": "ATELIERE CFR GRIVITA SA BUCURESTI",
+    "HUNT.RO": "IHUNT TECHNOLOGY IMPORT-EXPORT",
+    "2P.RO": "2PERFORMANT NETWORK",
+    "BRNA.RO": "ROMNAV SA BRAILA",
+    "SPX.RO": "SIPEX COMPANY",
+    "AVIO.RO": "AVIOANE SA CRAIOVA",
+    "LIH.RO": "LIFE IS HARD S.A.",
+    "CLAIM.RO": "AIR CLAIM",
+    "CODE.RO": "Softbinator Technologies",
+    "REIT.RO": "Star Residence Invest",
+    "BONA.RO": "BONAS IMPORT EXPORT",
+    "MAM.RO": "MAMBRICOLAJ S.A.",
+    "FRB.RO": "FIREBYTE GAMES",
+}
+AERO_TICKERS = list(AERO_CONSTITUENTS.keys())
 ETF_TICKERS = ["TVBETETF.RO", "PTENGETF.RO"]
 
-TICKERS = BET_CONSTITUENTS + ETF_TICKERS
+TICKERS = BET_CONSTITUENTS + ETF_TICKERS + AERO_TICKERS
 
 BET_PERIODS = {
     "1 zi": ("1d", "5m"),
@@ -330,20 +370,28 @@ st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.title("BVB Recommender")
 
 
+
 with st.sidebar:
     st.header("Setari")
     history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)
     momentum_lb = st.number_input("Lookback momentum", value=DEFAULT_SETTINGS["momentum_lookback"], step=5)
-    aero_syms_str = st.text_input("Simboluri AeRO (BETAeRO), separate prin virgula", value="")
-    aero_syms = [s.strip() for s in aero_syms_str.split(",") if s.strip()]
+    aero_extra_str = st.text_input("Simboluri AeRO suplimentare, separate prin virgula", value="")
+    aero_extra = [s.strip() for s in aero_extra_str.split(",") if s.strip()]
+    aero_syms = AERO_TICKERS + [s for s in aero_extra if s not in AERO_TICKERS and s not in BET_CONSTITUENTS and s not in ETF_TICKERS]
 
-# lista completa de simboluri: BET + ETF-uri + AeRO (introduse de dumneavoastra)
+# lista completa de simboluri: BET + ETF-uri + AeRO
 ALL_TICKERS = BET_CONSTITUENTS + ETF_TICKERS + [s for s in aero_syms if s not in BET_CONSTITUENTS and s not in ETF_TICKERS]
 
 # date principale
 rows = fetch_all(ALL_TICKERS, int(history_days), int(momentum_lb))
 for r in rows:
     r["score"] = score_row(r)
+
+# fortam denumirile pentru companiile AeRO cunoscute
+for r in rows:
+    if r["symbol"] in AERO_CONSTITUENTS:
+        r["name"] = AERO_CONSTITUENTS[r["symbol"]]
+
 rows_sorted = sorted(rows, key=lambda x: (np.nan_to_num(x["score"], nan=-1e9)), reverse=True)
 
 # impartim pe universuri

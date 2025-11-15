@@ -410,8 +410,6 @@ with col1:
                 st.success(alert_msg)
         except Exception:
             pass
-        else:
-            st.write("Date indisponibile")
     else:
         data = simulare
         if data is not None and not data.empty:
@@ -438,8 +436,6 @@ with col1:
                 st.success(alert_msg)
         except Exception:
             pass
-        else:
-            st.write("Date indisponibile")
 
 with col2:
     st.subheader("Detalii actiune")

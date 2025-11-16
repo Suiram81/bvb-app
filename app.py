@@ -9,7 +9,7 @@ from datetime import datetime, date
 
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
 BET_TICKERS = ["^BETI","^BET"]
-BET_SCALE = 176.0  # factor pentru a apropia nivelul BET de valorile brokerului
+BET_SCALE = 176.0  # factor implicit; va fi recalibrat dinamic dupa valoarea BET de pe BVB
 
 BET_CONSTITUENTS = [
     "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
@@ -79,6 +79,67 @@ DEFAULT_SETTINGS = {
 USER_PORTFOLIO = {"TLV.RO","SNP.RO","H2O.RO","EL.RO"}
 
 TAX_SWITCHOVER = date(2026, 1, 1)
+
+def fetch_bet_last_from_bvb():
+    """Incearca sa citeasca valoarea curenta a indicelui BET direct de pe site-ul BVB.
+
+    Returneaza un float cu nivelul indicelui sau None daca nu reuseste.
+    """
+    try:
+        import requests
+        urls = [
+            "https://www.bvb.ro/",
+            "https://m.bvb.ro/financialinstruments/indices/indicesprofiles",
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, timeout=10)
+            except Exception:
+                continue
+            if r.status_code != 200:
+                continue
+            html = r.text
+            # incercam sa gasim tabele HTML
+            try:
+                tables = pd.read_html(html, decimal=",", thousands=".")
+                for df in tables:
+                    if df.empty or df.shape[1] < 2:
+                        continue
+                    # cautam randul care contine "BET"
+                    mask = df.apply(lambda col: col.astype(str).str.contains(r"\bBET\b", case=False, regex=True))
+                    rows = df[mask.any(axis=1)]
+                    if not rows.empty:
+                        # extragem toate valorile numerice din acel rand
+                        vals = []
+                        for v in rows.iloc[0].values:
+                            s = str(v)
+                            s = s.replace("\xa0", " ").strip()
+                            try:
+                                num = float(s.replace(".", "").replace(",", "."))
+                                vals.append(num)
+                            except Exception:
+                                continue
+                        if vals:
+                            candidate = max(vals)
+                            if candidate > 1000:
+                                return candidate
+            except Exception:
+                pass
+
+            # fallback: expresie regulata direct in HTML
+            import re as _re
+            m = _re.search(r"BET[^0-9]*([0-9\.\,]{4,})", html)
+            if m:
+                try:
+                    s = m.group(1)
+                    val = float(s.replace(".", "").replace(",", "."))
+                    if val > 1000:
+                        return val
+                except Exception:
+                    pass
+    except Exception:
+        return None
+    return None
 def net_rate_for_date(dstr):
     try:
         d = datetime.fromisoformat(str(dstr)).date()
@@ -556,7 +617,14 @@ with tab_bet:
         if data is not None and not data.empty:
             val_raw = float(data['BET_Close'].iloc[-1])
             prev_raw = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val_raw
-            val = val_raw * BET_SCALE
+
+            # calibrare dinamica a scalei BET pe baza valorii curente de pe BVB
+            bet_bvb = fetch_bet_last_from_bvb()
+            scale = BET_SCALE
+            if bet_bvb is not None and val_raw > 0:
+                scale = bet_bvb / val_raw
+
+            val = val_raw * scale
             prev = prev_raw * BET_SCALE
             var = val - prev
             varpct = (var / prev * 100.0) if prev else 0.0
@@ -583,7 +651,15 @@ with tab_bet:
                 st.info("Indicatorul Buffett nu poate fi calculat acum. Date PIB indisponibile.")
             if data is not None and not data.empty:
                 df_bet = data.reset_index().rename(columns={data.index.name or 'index': 'Date'})
-                df_bet['BET_Display'] = df_bet['BET_Close'] * BET_SCALE
+                scale_chart = BET_SCALE
+                try:
+                    # incercam sa calibram si pentru grafic
+                    last_bet_bvb = fetch_bet_last_from_bvb()
+                    if last_bet_bvb is not None and float(df_bet['BET_Close'].iloc[-1]) > 0:
+                        scale_chart = last_bet_bvb / float(df_bet['BET_Close'].iloc[-1])
+                except Exception:
+                    pass
+                df_bet['BET_Display'] = df_bet['BET_Close'] * scale_chart
                 y_min = float(df_bet['BET_Display'].min()) * 0.97
                 y_max = float(df_bet['BET_Display'].max()) * 1.03
 

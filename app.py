@@ -3,13 +3,13 @@ import time
 import pandas as pd
 import numpy as np
 import yfinance as yf
+import math
 import altair as alt
 import streamlit as st
 from datetime import datetime, date
 
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
 BET_TICKERS = ["^BETI","^BET"]
-BET_SCALE = 176.0  # factor pentru a apropia nivelul BET de valorile brokerului
 
 BET_CONSTITUENTS = [
     "ATB.RO","AQ.RO","TLV.RO","BRD.RO","TEL.RO","DIGI.RO","FP.RO","M.RO",
@@ -532,12 +532,15 @@ with tab_bet:
         simulare = compute_bet_simulare(rows_bet, choice) if rows_bet else None
         data = bet_yahoo if bet_yahoo is not None else simulare
         if data is not None and not data.empty:
-            val_raw = float(data['BET_Close'].iloc[-1])
-            prev_raw = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val_raw
-            val = val_raw * BET_SCALE
-            prev = prev_raw * BET_SCALE
+            val = float(data['BET_Close'].iloc[-1])
+            prev = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val
             var = val - prev
             varpct = (var / prev * 100.0) if prev else 0.0
+            # nu mai rescalam seria BET_Close; folosim valorile asa cum sunt din sursa
+
+
+
+
 
             m1, m2, m3 = st.columns(3)
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
@@ -561,15 +564,19 @@ with tab_bet:
                 st.info("Indicatorul Buffett nu poate fi calculat acum. Date PIB indisponibile.")
             if data is not None and not data.empty:
                 df_bet = data.reset_index().rename(columns={data.index.name or 'index': 'Date'})
-                df_bet['BET_Display'] = df_bet['BET_Close'] * BET_SCALE
-                y_min = float(df_bet['BET_Display'].min()) * 0.97
-                y_max = float(df_bet['BET_Display'].max()) * 1.03
+                val_max = float(df_bet['BET_Close'].max())
+                y_min = 0
+                y_max = math.ceil(val_max / 1000) * 1000
                 chart = (
                     alt.Chart(df_bet)
-                    .mark_line()
+                    .mark_area(line={"strokeWidth": 1})
                     .encode(
-                        x=alt.X('Date:T', axis=alt.Axis(format='%d/%m/%Y')),
-                        y=alt.Y('BET_Display:Q', scale=alt.Scale(domain=[y_min, y_max]))
+                        x='Date:T',
+                        y=alt.Y(
+                            'BET_Close:Q',
+                            scale=alt.Scale(domain=[y_min, y_max], nice=False),
+                            axis=alt.Axis(zero=False)
+                        )
                     )
                 )
                 st.altair_chart(chart, use_container_width=True)

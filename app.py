@@ -755,23 +755,77 @@ with tab_bet:
         if rows_bet:
             symbols_bet = [r["symbol"] for r in rows_bet]
             sel = st.selectbox("Alege simbol", symbols_bet)
+            perioada_act = st.selectbox("Perioada actiune", list(BET_PERIODS.keys()), index=5, key="bet_stock_period")
             row = next(r for r in rows_bet if r["symbol"] == sel)
             h = row["history"].copy()
             if row.get("no_data"):
                 st.write("nu ai date de a genera raportul")
             else:
+                if "Date" not in h.columns:
+                    h = h.rename(columns={h.columns[0]: "Date"})
                 h["Close"] = h["Close"].astype(float)
+
+                period_rows_map = {
+                    "1 zi": 1,
+                    "5 zile": 5,
+                    "1 luna": 22,
+                    "3 luni": 66,
+                    "6 luni": 130,
+                    "1 an": 260,
+                    "5 ani": len(h)
+                }
+                n_rows = period_rows_map.get(perioada_act, len(h))
+                if len(h) > n_rows:
+                    h_plot = h.tail(n_rows).copy()
+                else:
+                    h_plot = h.copy()
+
                 st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
                 st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
                 st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
                 st.metric("Volatilitate %", value=f"{row['volatility']:.1f}%")
                 st.metric("Volum mediu 30z", value=int(row['avg_volume']))
-                st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
+                st.metric("Ultimul dividend net %", value=(f"{row.get('last_dividend_net_pct'):.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
                 st.metric("Ex date", value=(row.get('last_div_date') or "-"))
                 st.metric("Predictie 1 zi %", value=(f"{row.get('pred_next_change_pct'):+.2f}%" if row.get("pred_next_change_pct") is not None else "-"))
-                st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
+
+                import pandas as _pd
+                import altair as _alt
+
+                df_real = _pd.DataFrame({
+                    "Date": _pd.to_datetime(h_plot["Date"]),
+                    "Price": h_plot["Close"].astype(float),
+                    "Tip": "Istoric"
+                })
+
+                pred_price = row.get("pred_next_price")
+                if pred_price is not None and len(h_plot) > 0:
+                    last_date = _pd.to_datetime(h_plot["Date"].iloc[-1])
+                    next_date = last_date + _pd.Timedelta(days=1)
+                    df_pred = _pd.DataFrame({
+                        "Date": [last_date, next_date],
+                        "Price": [h_plot["Close"].iloc[-1], float(pred_price)],
+                        "Tip": "Predictie"
+                    })
+                    df_plot = _pd.concat([df_real, df_pred], ignore_index=True)
+                else:
+                    df_plot = df_real
+
+                chart = _alt.Chart(df_plot).mark_line().encode(
+                    x=_alt.X('Date:T', axis=_alt.Axis(format='%d/%m/%Y')),
+                    y=_alt.Y('Price:Q'),
+                    color=_alt.Color('Tip:N'),
+                    strokeDash=_alt.condition(
+                        _alt.datum.Tip == "Predictie",
+                        _alt.value([4, 4]),
+                        _alt.value([0, 0])
+                    )
+                ).interactive()
+
+                st.altair_chart(chart, use_container_width=True)
         else:
             st.write("Nu exista companii BET in lista curenta.")
+
 
 with tab_aero:
     st.subheader("Recomandari AeRO (BETAeRO)")

@@ -203,6 +203,11 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             except Exception:
                 pass
 
+        try:
+            pred_next_price, pred_next_change_pct = predict_next_day_linear(hist)
+        except Exception:
+            pred_next_price, pred_next_change_pct = None, None
+
         name = info.get("shortName", sym)
 
         return {
@@ -217,7 +222,9 @@ def fetch_symbol(sym, history_days, momentum_lookback):
             "yield": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_dividend_net_pct": float(last_div_net_pct) if last_div_net_pct is not None else None,
             "last_div_date": last_div_date,
-            "history": hist.reset_index()
+            "history": hist.reset_index(),
+            "pred_next_price": float(pred_next_price) if pred_next_price is not None else None,
+            "pred_next_change_pct": float(pred_next_change_pct) if pred_next_change_pct is not None else None
         }
     except Exception:
         return None
@@ -245,6 +252,8 @@ def fetch_all(tickers, history_days, momentum_lookback):
                     "yield": None,
                     "last_dividend_net_pct": None,
                     "last_div_date": None,
+                    "pred_next_price": None,
+                    "pred_next_change_pct": None,
                     "history": pd.DataFrame(),
                     "no_data": True
                 })
@@ -298,6 +307,44 @@ def compute_indicators(hist_df):
         }
     except Exception:
         return {}
+
+def predict_next_day_linear(hist_df, min_points=10):
+    try:
+        closes = hist_df["Close"].astype(float).dropna()
+        if len(closes) < min_points:
+            return None, None
+        n = len(closes)
+        x = np.arange(n, dtype=float)
+        y = closes.values
+        a, b = np.polyfit(x, y, 1)
+        next_price = a * float(n) + b
+        last_price = float(closes.iloc[-1])
+        if last_price <= 0:
+            return None, None
+        change_pct = (next_price / last_price - 1.0) * 100.0
+        return float(next_price), float(change_pct)
+    except Exception:
+        return None, None
+
+
+def bet_arima_forecast(df, steps=1):
+    try:
+        from statsmodels.tsa.arima.model import ARIMA
+    except Exception:
+        return None
+    try:
+        series = df["BET_Close"].astype(float).dropna()
+        if len(series) < 50:
+            return None
+        model = ARIMA(series, order=(1, 1, 1))
+        res = model.fit()
+        forecast = res.forecast(steps=steps)
+        if len(forecast) == 0:
+            return None
+        return float(forecast.iloc[-1])
+    except Exception:
+        return None
+
 
 def verdict(m):
     sma50 = m.get("sma50_last")
@@ -562,7 +609,7 @@ def bet_history(period="3mo", interval="1d"):
             pass
     return None, "NA"
 
-tab_bet, tab_aero, tab_etf = st.tabs(["BET", "AeRO", "ETF-uri BVB"])
+tab_bet, tab_aero, tab_etf, tab_rezumat = st.tabs(["BET", "AeRO", "ETF-uri BVB", "Rezumat zi BVB"])
 
 with tab_bet:
     st.subheader("Recomandari BET")
@@ -576,6 +623,7 @@ with tab_bet:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
+            "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
             "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
@@ -633,6 +681,12 @@ with tab_bet:
             m1.metric("Valoare", f"{val:,.2f}".replace(","," ").replace(".",","))
             m2.metric("Var", f"{var:+.2f}".replace(".",","))
             m3.metric("Var%", f"{varpct:+.2f}%".replace(".",","))
+            arima_raw = bet_arima_forecast(data)
+            if arima_raw is not None:
+                arima_val = arima_raw * scale
+                arima_var = arima_val - val
+                arima_varpct = (arima_var / val * 100.0) if val else 0.0
+                st.metric("Predictie BET ARIMA 1 zi", f"{arima_val:,.2f}".replace(","," ").replace(".",","), f"{arima_varpct:+.2f}%".replace(".",","))
             buffett, gdp_ron, gdp_period, meta_buffett = compute_buffett_indicator(BET_CONSTITUENTS)
             if buffett is not None:
                 if buffett < 70:
@@ -714,6 +768,7 @@ with tab_bet:
                 st.metric("Volum mediu 30z", value=int(row['avg_volume']))
                 st.metric("Ultimul dividend net %", value=(f"{row['last_dividend_net_pct']:.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
                 st.metric("Ex date", value=(row.get('last_div_date') or "-"))
+                st.metric("Predictie 1 zi %", value=(f"{row.get('pred_next_change_pct'):+.2f}%" if row.get("pred_next_change_pct") is not None else "-"))
                 st.line_chart(h.set_index("Date")["Close"] if "Date" in h.columns else h.set_index(h.columns[0])["Close"])
         else:
             st.write("Nu exista companii BET in lista curenta.")
@@ -730,6 +785,7 @@ with tab_aero:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
+            "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
             "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
@@ -749,9 +805,48 @@ with tab_etf:
             "Dividend net %": (round(r["last_dividend_net_pct"],2) if r.get("last_dividend_net_pct") is not None else np.nan),
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
+            "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
             "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
         st.dataframe(df_etf, use_container_width=True, hide_index=True)
     else:
+        st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")
+with tab_rezumat:
+    st.subheader("Rezumat zi BVB")
+    from datetime import datetime as _dt
+    now = _dt.now()
+    is_trading_day = now.weekday() < 5
+    st.write("Program orientativ BVB: luni - vineri, aproximativ 10:00 - 18:00.")
+    if not is_trading_day:
+        st.write("Astazi nu este zi obisnuita de tranzactionare. Rezumatul este calculat pe ultimele date disponibile.")
+
+    # Rezumat BET
+    bet_data, _ = bet_history("1mo", "1d")
+    if bet_data is not None and not bet_data.empty:
+        bet_last = float(bet_data["BET_Close"].iloc[-1])
+        bet_prev = float(bet_data["BET_Close"].iloc[-2]) if len(bet_data) >= 2 else bet_last
+        bet_var = bet_last - bet_prev
+        bet_varpct = (bet_var / bet_prev * 100.0) if bet_prev else 0.0
+        st.markdown("Indice BET")
+        st.write(f"Ultima variatie: {bet_var:+.2f} puncte, {bet_varpct:+.2f}%")
+    else:
+        st.write("Nu exista suficiente date pentru rezumatul BET.")
+
+    # Rezumat portofoliu utilizator
+    st.markdown("Rezumat portofoliu (simbolurile din USER_PORTFOLIO)")
+    port_rows = [r for r in rows_bet + rows_aero + rows_etf if r["symbol"] in USER_PORTFOLIO]
+    if port_rows:
+        df_port = pd.DataFrame([{
+            "Simbol": r["symbol"],
+            "Denumire": r["name"],
+            "Pret": round(r["price"], 2) if r["price"] is not None else None,
+            "Delta zi %": round(r["day_change"], 2) if not r.get("no_data") else None,
+            "Predictie 1 zi %": round(r.get("pred_next_change_pct", float("nan")), 2) if r.get("pred_next_change_pct") is not None else None,
+            "Recomandare": (rec_bet.get(r["symbol"]) or rec_aero.get(r["symbol"]) or rec_etf.get(r["symbol"]) or "N/A")
+        } for r in port_rows])
+        st.dataframe(df_port, use_container_width=True, hide_index=True)
+    else:
+        st.write("Nu exista simboluri din portofoliul utilizatorului in universul curent.")
+
         st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")

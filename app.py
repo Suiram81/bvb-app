@@ -530,7 +530,29 @@ with tab_bet:
         period, interval = BET_PERIODS.get(choice, ("1y","1d"))
         bet_yahoo, _ = bet_history(period, interval)
         simulare = compute_bet_simulare(rows_bet, choice) if rows_bet else None
-        data = bet_yahoo if bet_yahoo is not None else simulare
+
+        # logica de calibrare:
+        # 1. daca avem date BET directe de la Yahoo, le folosim
+        # 2. daca nu avem, folosim simularea pe componente si
+        #    o calibram astfel incat ultimul punct sa fie aliniat
+        #    cu ultimul BET disponibil pe o perioada mai lunga
+        data = None
+        if bet_yahoo is not None and not bet_yahoo.empty:
+            data = bet_yahoo
+        elif simulare is not None and not simulare.empty:
+            ref_yahoo, _ = bet_history("6mo", "1d")
+            if ref_yahoo is not None and not ref_yahoo.empty:
+                try:
+                    ref_last = float(ref_yahoo['BET_Close'].iloc[-1])
+                    sim_last = float(simulare['BET_Close'].iloc[-1])
+                    if sim_last > 0:
+                        k = ref_last / sim_last
+                        simulare = simulare.copy()
+                        simulare['BET_Close'] = simulare['BET_Close'] * k
+                except Exception:
+                    pass
+            data = simulare
+
         if data is not None and not data.empty:
             val_raw = float(data['BET_Close'].iloc[-1])
             prev_raw = float(data['BET_Close'].iloc[-2]) if len(data) >= 2 else val_raw

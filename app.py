@@ -7,11 +7,6 @@ import altair as alt
 import streamlit as st
 from datetime import datetime, date
 
-try:
-    import plotly.graph_objects as go
-except ImportError:
-    go = None
-
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
 BET_TICKERS = ["^BETI","^BET"]
 BET_SCALE = 176.0  # factor pentru a apropia nivelul BET de valorile brokerului
@@ -570,46 +565,20 @@ with tab_bet:
                 y_min = float(df_bet['BET_Display'].min()) * 0.97
                 y_max = float(df_bet['BET_Display'].max()) * 1.03
 
-                if go is not None:
-                    fig = go.Figure()
-                    fig.add_trace(
-                        go.Scatter(
-                            x=df_bet['Date'],
-                            y=df_bet['BET_Display'],
-                            mode='lines',
-                            line=dict(width=2),
-                            fill='tozeroy',
-                            # umplere albastru deschis, fundal deschis
-                            fillcolor='rgba(0, 123, 255, 0.25)',
-                            name='BET'
-                        )
-                    )
-                    fig.update_layout(
-                        template='plotly_white',
-                        margin=dict(l=40, r=20, t=30, b=40),
-                        xaxis=dict(
-                            title='Data',
-                            showgrid=True,
-                            tickformat='%d/%m/%Y'
-                        ),
-                        yaxis=dict(
-                            title='BET',
-                            showgrid=True,
-                            range=[y_min, y_max]
-                        ),
-                        hovermode='x unified',
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    chart = (
-                        alt.Chart(df_bet)
-                        .mark_area()
-                        .encode(
-                            x=alt.X('Date:T', axis=alt.Axis(format='%d/%m/%Y')),
-                            y=alt.Y('BET_Display:Q', scale=alt.Scale(domain=[y_min, y_max]))
-                        )
-                    )
-                    st.altair_chart(chart, use_container_width=True)
+                area = alt.Chart(df_bet).mark_area(
+                    opacity=0.4
+                ).encode(
+                    x=alt.X('Date:T', axis=alt.Axis(format='%d/%m/%Y')),
+                    y=alt.Y('BET_Display:Q', scale=alt.Scale(domain=[y_min, y_max])),
+                )
+
+                line = alt.Chart(df_bet).mark_line().encode(
+                    x=alt.X('Date:T'),
+                    y='BET_Display:Q',
+                )
+
+                chart = (area + line).interactive()
+                st.altair_chart(chart, use_container_width=True)
             # Alerte BET pe baza indicatorilor tehnici
             try:
                 bet_ind_df = data.copy()

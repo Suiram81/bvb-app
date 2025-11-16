@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import altair as alt
+import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime, date
 
@@ -62,13 +63,25 @@ ETF_TICKERS = ["TVBETETF.RO", "PTENGETF.RO"]
 TICKERS = BET_CONSTITUENTS + ETF_TICKERS + AERO_TICKERS
 
 BET_PERIODS = {
-    "1 zi": ("1d", "5m"),
-    "5 zile": ("5d", "15m"),
-    "1 luna": ("1mo", "1d"),
-    "3 luni": ("3mo", "1d"),
-    "6 luni": ("6mo", "1d"),
-    "1 an": ("1y", "1d"),
-    "5 ani": ("5y", "1wk"),
+    "1 zi": "1d",
+    "5 zile": "5d",
+    "15 zile": "15d",
+    "1 luna": "1mo",
+    "3 luni": "3mo",
+    "6 luni": "6mo",
+    "1 an": "1y",
+    "5 ani": "5y",
+}
+
+BET_INTERVALS = {
+    "1 zi": ["1m", "2m", "5m", "15m", "30m", "60m"],
+    "5 zile": ["5m", "15m", "30m", "60m"],
+    "15 zile": ["15m", "30m", "60m"],
+    "1 luna": ["60m", "1d"],
+    "3 luni": ["1d"],
+    "6 luni": ["1d"],
+    "1 an": ["1d", "1wk"],
+    "5 ani": ["1wk", "1mo"],
 }
 
 DEFAULT_SETTINGS = {
@@ -286,7 +299,7 @@ def bet_history(period="3mo", interval="1d"):
     return None, "NA"
 
 def compute_bet_simulare(rows_sorted, period_key):
-    period_days = {"1 zi":1, "5 zile":5, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
+    period_days = {"1 zi":1, "5 zile":5, "15 zile":15, "1 luna":30, "3 luni":90, "6 luni":180, "1 an":365, "5 ani":365*5}
     days = period_days.get(period_key, 90)
     series = []
     for r in rows_sorted:
@@ -524,11 +537,14 @@ with tab_bet:
 
     col1, col2 = st.columns([1,1])
 
+
     with col1:
         st.subheader("Indice BET")
         choice = st.selectbox("Perioada", list(BET_PERIODS.keys()), index=5, key="bet_period")
-        period, interval = BET_PERIODS.get(choice, ("1y","1d"))
-        bet_yahoo, _ = bet_history(period, interval)
+        available_intervals = BET_INTERVALS.get(choice, ["1d"])
+        interval_choice = st.selectbox("Interval", available_intervals, index=0, key="bet_interval")
+        period = BET_PERIODS.get(choice, "1y")
+        bet_yahoo, _ = bet_history(period, interval_choice)
         simulare = compute_bet_simulare(rows_bet, choice) if rows_bet else None
         data = bet_yahoo if bet_yahoo is not None else simulare
         if data is not None and not data.empty:
@@ -564,15 +580,36 @@ with tab_bet:
                 df_bet['BET_Display'] = df_bet['BET_Close'] * BET_SCALE
                 y_min = float(df_bet['BET_Display'].min()) * 0.97
                 y_max = float(df_bet['BET_Display'].max()) * 1.03
-                chart = (
-                    alt.Chart(df_bet)
-                    .mark_line()
-                    .encode(
-                        x=alt.X('Date:T', axis=alt.Axis(format='%d/%m/%Y')),
-                        y=alt.Y('BET_Display:Q', scale=alt.Scale(domain=[y_min, y_max]))
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_bet['Date'],
+                        y=df_bet['BET_Display'],
+                        mode='lines',
+                        name='BET',
+                        fill='tozeroy',
+                        fillcolor='rgba(0, 123, 255, 0.25)',
+                        line=dict(width=1.5)
                     )
                 )
-                st.altair_chart(chart, use_container_width=True)
+                fig.update_layout(
+                    xaxis=dict(
+                        title="Data",
+                        tickformat="%d/%m/%Y",
+                        showgrid=True
+                    ),
+                    yaxis=dict(
+                        title="BET",
+                        range=[y_min, y_max],
+                        showgrid=True
+                    ),
+                    margin=dict(l=40, r=20, t=10, b=40),
+                    plot_bgcolor="white",
+                    paper_bgcolor="white",
+                    hovermode="x unified",
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
             # Alerte BET pe baza indicatorilor tehnici
             try:
                 bet_ind_df = data.copy()

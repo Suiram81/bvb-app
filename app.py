@@ -875,6 +875,20 @@ with st.sidebar:
     tv_user = st.text_input("User Tradeville", value="")
     tv_pass = st.text_input("Parola Tradeville", value="", type="password")
     tv_demo = st.checkbox("Cont demo Tradeville", value=True)
+    if "tv_logged_in" not in st.session_state:
+        st.session_state["tv_logged_in"] = False
+    col_tv1, col_tv2 = st.columns(2)
+    with col_tv1:
+        if st.button("Logare Tradeville"):
+            if tv_user and tv_pass:
+                st.session_state["tv_logged_in"] = True
+                st.success("Logare Tradeville reusita pentru aceasta sesiune.")
+            else:
+                st.warning("Completati userul si parola pentru logare.")
+    with col_tv2:
+        if st.button("Delogare"):
+            st.session_state["tv_logged_in"] = False
+            st.info("V-ati delogat din Tradeville pentru aceasta sesiune.")
 
 # lista completa de simboluri: BET + ETF-uri + AeRO standard
 ALL_TICKERS = BET_CONSTITUENTS + ETF_TICKERS + AERO_TICKERS
@@ -1064,9 +1078,9 @@ with tab_bet:
             sel = st.selectbox("Alege simbol", symbols_bet)
             perioada_act = st.selectbox("Perioada actiune", list(BET_PERIODS.keys()), index=5, key="bet_stock_period")
             impact_stiri = st.selectbox("Impact stiri", ["Neutru", "Pozitiv", "Negativ", "Auto (din stiri)"], index=0, key="bet_news_impact")
+            row = next(r for r in rows_bet if r["symbol"] == sel)
             impact_auto = get_news_impact_for_symbol(sel, row.get("name"))
             st.caption(f"Impact stiri automat (ZF + Profit.ro): {impact_auto}")
-            row = next(r for r in rows_bet if r["symbol"] == sel)
             h = row["history"].copy()
             if row.get("no_data"):
                 st.write("nu ai date de a genera raportul")
@@ -1252,8 +1266,8 @@ with tab_rezumat:
 
 with tab_port:
     st.subheader("Portofoliu Tradeville")
-    if not tv_user or not tv_pass:
-        st.info("Introduceti userul si parola Tradeville in stanga pentru a incarca portofoliul.")
+    if not st.session_state.get("tv_logged_in", False) or not tv_user or not tv_pass:
+        st.info("Conectati-va la Tradeville in stanga pentru a incarca portofoliul.")
     else:
         port_rows = get_portfolio_tradeville(tv_user, tv_pass, demo=tv_demo)
         if not port_rows:

@@ -308,21 +308,52 @@ def compute_indicators(hist_df):
     except Exception:
         return {}
 
-def predict_next_day_linear(hist_df, min_points=10):
+def predict_next_day_linear(hist_df, min_points=15):
+    """Model hibrid pe termen scurt.
+    - trend pe ultimele 20 de zile
+    - smoothing pe ultimele 5 zile
+    - ajustare dupa volatilitatea zilnica
+    """
     try:
         closes = hist_df["Close"].astype(float).dropna()
         if len(closes) < min_points:
             return None, None
-        n = len(closes)
-        x = np.arange(n, dtype=float)
-        y = closes.values
-        a, b = np.polyfit(x, y, 1)
-        next_price = a * float(n) + b
+
+        # Pretul curent
         last_price = float(closes.iloc[-1])
         if last_price <= 0:
             return None, None
-        change_pct = (next_price / last_price - 1.0) * 100.0
-        return float(next_price), float(change_pct)
+
+        # Trend pe ultimele 20 de zile
+        tail_trend = closes.tail(min(20, len(closes)))
+        n_trend = len(tail_trend)
+        x_trend = np.arange(n_trend, dtype=float)
+        y_trend = tail_trend.values
+        a, b = np.polyfit(x_trend, y_trend, 1)
+        trend_next = a * float(n_trend) + b
+
+        # Smoothing pe ultimele 5 zile
+        tail_smooth = closes.tail(min(5, len(closes)))
+        smoothed = tail_smooth.ewm(alpha=0.5, adjust=False).mean().iloc[-1]
+
+        # Baza: medie intre trend si smoothing
+        base_next = float((trend_next + smoothed) / 2.0)
+
+        # Volatilitatea ultimelor 20 de zile (pct_change)
+        rets = closes.pct_change().dropna()
+        if len(rets) > 0:
+            vol20 = rets.tail(min(20, len(rets))).std()
+        else:
+            vol20 = 0.0
+
+        # Limitare miscari exagerate la aproximativ +/- 2 deviatii standard
+        if vol20 and not np.isnan(vol20):
+            max_up = last_price * (1.0 + 2.0 * vol20)
+            max_down = last_price * (1.0 - 2.0 * vol20)
+            base_next = max(min(base_next, max_up), max_down)
+
+        change_pct = (base_next / last_price - 1.0) * 100.0
+        return float(base_next), float(change_pct)
     except Exception:
         return None, None
 

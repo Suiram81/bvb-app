@@ -534,13 +534,86 @@ def score_row(r):
 
 def build_reason(r):
     if r.get("no_data"):
-        return "nu ai date de a genera raportul"
+        return "nu exista suficiente date pentru a genera raportul"
     parts = []
-    if r["momentum"] > 0: parts.append(f"+{r['momentum']:.1f}% in 30z")
-    if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
-    if r["avg_volume"] > 100_000: parts.append("volum ridicat")
-    if r["pe"] is not None and r["pe"] < 15: parts.append(f"PE {r['pe']:.1f}")
-    return "; ".join(parts) if parts else "date limitate, istoric scurt"
+
+    # momentum pe 30 zile, pozitiv sau negativ
+    try:
+        mom = float(r.get("momentum", 0.0))
+        if mom != mom:
+            mom = 0.0
+    except Exception:
+        mom = 0.0
+    if mom > 0.5:
+        parts.append(f"+{mom:.1f}% in 30z")
+    elif mom < -0.5:
+        parts.append(f"{mom:.1f}% in 30z")
+
+    # volatilitate
+    try:
+        vol = float(r.get("volatility", 0.0))
+        if vol != vol:
+            vol = 0.0
+    except Exception:
+        vol = 0.0
+    if vol > 5:
+        parts.append(f"vol {vol:.1f}%")
+    elif vol > 0:
+        parts.append(f"vol {vol:.1f}% stabil")
+
+    # volum
+    try:
+        avg_vol = float(r.get("avg_volume", 0.0))
+        if avg_vol != avg_vol:
+            avg_vol = 0.0
+    except Exception:
+        avg_vol = 0.0
+    if avg_vol > 200_000:
+        parts.append("volum ridicat")
+    elif avg_vol > 50_000:
+        parts.append("volum mediu")
+
+    # evaluare PE
+    pe = r.get("pe")
+    if pe is not None:
+        try:
+            pe_val = float(pe)
+        except Exception:
+            pe_val = None
+        if pe_val is not None:
+            if pe_val < 15:
+                parts.append(f"PE {pe_val:.1f}")
+            elif pe_val > 20:
+                parts.append(f"PE ridicat {pe_val:.1f}")
+
+    # ultimul dividend net
+    yld = r.get("last_dividend_net_pct") or r.get("yield")
+    if yld is not None:
+        try:
+            yld_val = float(yld)
+        except Exception:
+            yld_val = None
+        if yld_val is not None and yld_val > 0:
+            parts.append(f"ult div net {yld_val:.1f}%")
+
+    # predictie 1 zi
+    pred_pct = r.get("pred_next_change_pct")
+    if pred_pct is not None:
+        try:
+            p = float(pred_pct)
+            if p != p:
+                p = None
+        except Exception:
+            p = None
+        if p is not None:
+            parts.append(f"predictie 1 zi {p:+.1f}%")
+
+    if not parts:
+        # motiv minim pe datele existente
+        parts.append(f"momentum {mom:.1f}%")
+        parts.append(f"vol {vol:.1f}%")
+
+    return "; ".join(parts)
 
 def compute_indicators(hist_df):
     try:

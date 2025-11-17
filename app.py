@@ -930,11 +930,11 @@ with tab_bet:
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
         if mode_view == "Simplu":
-        cols_show = [c for c in df_bet.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
-        df_show = df_bet[cols_show]
-    else:
-        df_show = df_bet
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
+            cols_show = [c for c in df_bet.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
+            df_show = df_bet[cols_show]
+        else:
+            df_show = df_bet
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista date pentru companiile din BET.")
 
@@ -1179,11 +1179,11 @@ with tab_aero:
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
         if mode_view == "Simplu":
-        cols_show = [c for c in df_aero.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
-        df_show = df_aero[cols_show]
-    else:
-        df_show = df_aero
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
+            cols_show = [c for c in df_aero.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
+            df_show = df_aero[cols_show]
+        else:
+            df_show = df_aero
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista companii AeRO de afisat in configuratia curenta.")
 
@@ -1204,11 +1204,11 @@ with tab_etf:
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
         if mode_view == "Simplu":
-        cols_show = [c for c in df_etf.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
-        df_show = df_etf[cols_show]
-    else:
-        df_show = df_etf
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
+            cols_show = [c for c in df_etf.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
+            df_show = df_etf[cols_show]
+        else:
+            df_show = df_etf
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")
 with tab_rezumat:

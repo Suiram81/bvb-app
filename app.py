@@ -577,7 +577,13 @@ def predict_next_day_linear(hist_df, min_points=15):
     try:
         closes = hist_df["Close"].astype(float).dropna()
         if len(closes) < min_points:
-            return None, None
+            # fallback minimal
+    if len(closes)>=3:
+        p0,p1,p2 = closes.iloc[-3], closes.iloc[-2], closes.iloc[-1]
+        last=float(p2); trend=((p2-p1)+(p1-p0))/2
+        nxt=last+trend; pct=(nxt/last-1)*100
+        return float(nxt), float(pct)
+    return None, None
 
         # Pretul curent
         last_price = float(closes.iloc[-1])

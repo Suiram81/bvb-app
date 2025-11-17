@@ -309,10 +309,10 @@ def compute_indicators(hist_df):
         return {}
 
 def predict_next_day_linear(hist_df, min_points=15):
-    """Model hibrid pe termen scurt.
-    - trend pe ultimele 20 de zile
-    - smoothing pe ultimele 5 zile
-    - ajustare dupa volatilitatea zilnica
+    """Model hibrid pe termen scurt calibrat pentru BVB.
+    - 40% trend pe ultimele 20 de zile
+    - 60% smoothing pe ultimele 5 zile
+    - limitare dupa volatilitatea zilnica
     """
     try:
         closes = hist_df["Close"].astype(float).dropna()
@@ -336,8 +336,8 @@ def predict_next_day_linear(hist_df, min_points=15):
         tail_smooth = closes.tail(min(5, len(closes)))
         smoothed = tail_smooth.ewm(alpha=0.5, adjust=False).mean().iloc[-1]
 
-        # Baza: medie intre trend si smoothing
-        base_next = float((trend_next + smoothed) / 2.0)
+        # Baza: combinatie 40% trend, 60% smoothing
+        base_next = float(0.4 * trend_next + 0.6 * smoothed)
 
         # Volatilitatea ultimelor 20 de zile (pct_change)
         rets = closes.pct_change().dropna()
@@ -346,11 +346,17 @@ def predict_next_day_linear(hist_df, min_points=15):
         else:
             vol20 = 0.0
 
-        # Limitare miscari exagerate la aproximativ +/- 2 deviatii standard
+        # Limitare miscari la aproximativ +/- 1.5 deviatii standard
         if vol20 and not np.isnan(vol20):
-            max_up = last_price * (1.0 + 2.0 * vol20)
-            max_down = last_price * (1.0 - 2.0 * vol20)
+            max_up = last_price * (1.0 + 1.5 * vol20)
+            max_down = last_price * (1.0 - 1.5 * vol20)
             base_next = max(min(base_next, max_up), max_down)
+
+        # Daca volatilitatea este foarte mica, limitam oricum intre -2% si +2%
+        if vol20 is not None and not np.isnan(vol20) and vol20 < 0.02:
+            cap_up = last_price * 1.02
+            cap_down = last_price * 0.98
+            base_next = max(min(base_next, cap_up), cap_down)
 
         change_pct = (base_next / last_price - 1.0) * 100.0
         return float(base_next), float(change_pct)
@@ -787,6 +793,7 @@ with tab_bet:
             symbols_bet = [r["symbol"] for r in rows_bet]
             sel = st.selectbox("Alege simbol", symbols_bet)
             perioada_act = st.selectbox("Perioada actiune", list(BET_PERIODS.keys()), index=5, key="bet_stock_period")
+            impact_stiri = st.selectbox("Impact stiri", ["Neutru", "Pozitiv", "Negativ"], index=0, key="bet_news_impact")
             row = next(r for r in rows_bet if r["symbol"] == sel)
             h = row["history"].copy()
             if row.get("no_data"):
@@ -811,6 +818,20 @@ with tab_bet:
                 else:
                     h_plot = h.copy()
 
+                # baza de predictie din model
+                base_pred_pct = row.get("pred_next_change_pct")
+                # ajustare din stiri
+                news_adj = 0.0
+                if impact_stiri == "Pozitiv":
+                    news_adj = 0.5
+                elif impact_stiri == "Negativ":
+                    news_adj = -0.5
+
+                if base_pred_pct is not None:
+                    adj_pred_pct = base_pred_pct + news_adj
+                else:
+                    adj_pred_pct = None
+
                 st.metric("Pret curent RON", value=f"{row['price']:.2f}" if row['price'] is not None else "-")
                 st.metric("Delta zi %", value=f"{row['day_change']:+.2f}%")
                 st.metric("Momentum 30z %", value=f"{row['momentum']:+.2f}%")
@@ -818,7 +839,7 @@ with tab_bet:
                 st.metric("Volum mediu 30z", value=int(row['avg_volume']))
                 st.metric("Ultimul dividend net %", value=(f"{row.get('last_dividend_net_pct'):.2f}%" if row.get('last_dividend_net_pct') is not None else "-"))
                 st.metric("Ex date", value=(row.get('last_div_date') or "-"))
-                st.metric("Predictie 1 zi %", value=(f"{row.get('pred_next_change_pct'):+.2f}%" if row.get("pred_next_change_pct") is not None else "-"))
+                st.metric("Predictie 1 zi %", value=(f"{adj_pred_pct:+.2f}%" if adj_pred_pct is not None else "-"))
 
                 import pandas as _pd
                 import altair as _alt
@@ -829,13 +850,19 @@ with tab_bet:
                     "Tip": "Istoric"
                 })
 
-                pred_price = row.get("pred_next_price")
+                # calculam punctul de predictie ajustat
+                last_close = float(h_plot["Close"].iloc[-1])
+                if adj_pred_pct is not None:
+                    pred_price = last_close * (1.0 + adj_pred_pct / 100.0)
+                else:
+                    pred_price = None
+
                 if pred_price is not None and len(h_plot) > 0:
                     last_date = _pd.to_datetime(h_plot["Date"].iloc[-1])
                     next_date = last_date + _pd.Timedelta(days=1)
                     df_pred = _pd.DataFrame({
                         "Date": [last_date, next_date],
-                        "Price": [h_plot["Close"].iloc[-1], float(pred_price)],
+                        "Price": [last_close, float(pred_price)],
                         "Tip": "Predictie"
                     })
                     df_plot = _pd.concat([df_real, df_pred], ignore_index=True)

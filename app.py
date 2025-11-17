@@ -1251,15 +1251,30 @@ with tab_rezumat:
 
     # Rezumat BET
     bet_data, _ = bet_history("1mo", "1d")
+    # fallback pe orizont mai lung daca nu vine nimic pe 1 luna
+    if (bet_data is None) or bet_data.empty:
+        bet_data, _ = bet_history("3mo", "1d")
     if bet_data is not None and not bet_data.empty:
         bet_last = float(bet_data["BET_Close"].iloc[-1])
-        bet_prev = float(bet_data["BET_Close"].iloc[-2]) if len(bet_data) >= 2 else bet_last
+        if len(bet_data) >= 2:
+            bet_prev = float(bet_data["BET_Close"].iloc[-2])
+        else:
+            bet_prev = bet_last
         bet_var = bet_last - bet_prev
         bet_varpct = (bet_var / bet_prev * 100.0) if bet_prev else 0.0
+        bet_min20 = float(bet_data["BET_Close"].tail(min(20, len(bet_data))).min())
+        bet_max20 = float(bet_data["BET_Close"].tail(min(20, len(bet_data))).max())
         st.markdown("Indice BET")
         st.write(f"Ultima variatie: {bet_var:+.2f} puncte, {bet_varpct:+.2f}%")
+        st.write(f"Intervalul aproximativ al ultimelor 20 de sedinte: minim {bet_min20:.2f}, maxim {bet_max20:.2f}.")
+        if bet_varpct > 0.5:
+            st.success("Piata este usor pozitiva pe BET astazi.")
+        elif bet_varpct < -0.5:
+            st.warning("Piata este usor negativa pe BET astazi.")
+        else:
+            st.info("Piata este mai degraba neutra pe BET astazi.")
     else:
-        st.write("Nu exista suficiente date pentru rezumatul BET.")
+        st.write("Nu exista deloc date disponibile pentru indicele BET in acest moment.")
 
     # Rezumat portofoliu utilizator
     st.markdown("Rezumat portofoliu (simbolurile din USER_PORTFOLIO)")

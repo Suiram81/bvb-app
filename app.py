@@ -540,7 +540,7 @@ def build_reason(r):
     if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
     if r["avg_volume"] > 100_000: parts.append("volum ridicat")
     if r["pe"] is not None and r["pe"] < 15: parts.append(f"PE {r['pe']:.1f}")
-    return "; ".join(parts) if parts else "-"
+    return "; ".join(parts) if parts else "date limitate, istoric scurt"
 
 def compute_indicators(hist_df):
     try:
@@ -570,20 +570,29 @@ def compute_indicators(hist_df):
 
 def predict_next_day_linear(hist_df, min_points=15):
     """Model hibrid pe termen scurt calibrat pentru BVB.
-    - 40% trend pe ultimele 20 de zile
-    - 60% smoothing pe ultimele 5 zile
-    - limitare dupa volatilitatea zilnica
+    40% trend pe ultimele 20 de zile
+    60% smoothing pe ultimele 5 zile
+    limitare dupa volatilitatea zilnica
     """
     try:
         closes = hist_df["Close"].astype(float).dropna()
-        if len(closes) < min_points:
-            # fallback minimal
-    if len(closes)>=3:
-        p0,p1,p2 = closes.iloc[-3], closes.iloc[-2], closes.iloc[-1]
-        last=float(p2); trend=((p2-p1)+(p1-p0))/2
-        nxt=last+trend; pct=(nxt/last-1)*100
-        return float(nxt), float(pct)
-    return None, None
+        n = len(closes)
+        if n == 0:
+            return None, None
+
+        # fallback pentru istoric scurt
+        if n < min_points:
+            if n >= 3:
+                p0, p1, p2 = closes.iloc[-3], closes.iloc[-2], closes.iloc[-1]
+                last_price = float(p2)
+                if last_price <= 0:
+                    return None, None
+                trend = ((p2 - p1) + (p1 - p0)) / 2.0
+                base_next = float(last_price + trend)
+                change_pct = (base_next / last_price - 1.0) * 100.0
+                return float(base_next), float(change_pct)
+            else:
+                return None, None
 
         # Pretul curent
         last_price = float(closes.iloc[-1])
@@ -602,7 +611,7 @@ def predict_next_day_linear(hist_df, min_points=15):
         tail_smooth = closes.tail(min(5, len(closes)))
         smoothed = tail_smooth.ewm(alpha=0.5, adjust=False).mean().iloc[-1]
 
-        # Baza: combinatie 40% trend, 60% smoothing
+        # Baza  combinatie 40% trend, 60% smoothing
         base_next = float(0.4 * trend_next + 0.6 * smoothed)
 
         # Volatilitatea ultimelor 20 de zile (pct_change)
@@ -612,13 +621,13 @@ def predict_next_day_linear(hist_df, min_points=15):
         else:
             vol20 = 0.0
 
-        # Limitare miscari la aproximativ +/- 1.5 deviatii standard
+        # Limitare miscari la aproximativ  1.5 deviatii standard
         if vol20 and not np.isnan(vol20):
             max_up = last_price * (1.0 + 1.5 * vol20)
             max_down = last_price * (1.0 - 1.5 * vol20)
             base_next = max(min(base_next, max_up), max_down)
 
-        # Daca volatilitatea este foarte mica, limitam oricum intre -2% si +2%
+        # Daca volatilitatea este foarte mica, limitam oricum intre 2% si +2%
         if vol20 is not None and not np.isnan(vol20) and vol20 < 0.02:
             cap_up = last_price * 1.02
             cap_down = last_price * 0.98
@@ -737,14 +746,14 @@ def compute_recommendations(rows_sorted):
         h = h.set_index(h.columns[0])
         v_text, _ = verdict(compute_indicators(h))
         s = r["score"]
-        if v_text == "OK de cumparat" and s >= q75:
+        if s != s:
+            s = 0.0
+        if s >= q75:
             rec = "Cumpara"
-        elif s >= q25 and s < q75:
+        elif s >= q25:
             rec = "Mentine"
-        elif v_text == "De evitat acum" and s < q25:
-            rec = "Vinde"
         else:
-            rec = "🔍 Insuficiente date pentru a face analiza"
+            rec = "Vinde"
         if r["symbol"] in USER_PORTFOLIO and rec == "Cumpara":
             rec = "Mentine"
         rec_map[r["symbol"]] = rec
@@ -946,7 +955,7 @@ with tab_bet:
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
-            "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_bet.get(r["symbol"], "Mentine (date limitate)") if not r.get("no_data") else "Mentine (date limitate)",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
         if mode_view == "Simplu":
@@ -1195,7 +1204,7 @@ with tab_aero:
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
-            "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_aero.get(r["symbol"], "Mentine (date limitate)") if not r.get("no_data") else "Mentine (date limitate)",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
         if mode_view == "Simplu":
@@ -1220,7 +1229,7 @@ with tab_etf:
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
-            "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_etf.get(r["symbol"], "Mentine (date limitate)") if not r.get("no_data") else "Mentine (date limitate)",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
         if mode_view == "Simplu":

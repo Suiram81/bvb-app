@@ -7,7 +7,267 @@ import altair as alt
 import streamlit as st
 from datetime import datetime, date
 
+import json
+import threading
+import queue
+import requests
+import xml.etree.ElementTree as ET
+
+
 APP_TITLE = "BVB Recommender Web v1.9.2 (fix PTENGETF motiv + taxe 2026 + ETF-uri)"
+
+TV_WS_URL = "wss://api.tradeville.ro:443"
+TV_WS_PROTOCOL = ["apitv"]
+
+def get_last_quote_tradeville(symbol, coduser, parola, demo=True, timeout_sec=5):
+    """Intoarce un dict cu pret, bid, ask, volum pentru simbolul dat sau None daca nu reuseste."""
+    if not coduser or not parola:
+        return None
+    try:
+        import websocket  # type: ignore
+    except Exception:
+        return None
+
+    q = queue.Queue()
+
+    def on_open(ws):
+        try:
+            login_msg = {
+                "cmd": "login",
+                "prm": {
+                    "coduser": coduser,
+                    "parola": parola,
+                    "demo": bool(demo),
+                },
+            }
+            ws.send(json.dumps(login_msg))
+            sub_msg = {
+                "cmd": "subscribe",
+                "sym": symbol,
+                "prm": {},
+            }
+            ws.send(json.dumps(sub_msg))
+        except Exception:
+            q.put(None)
+
+    def on_message(ws, message):
+        try:
+            data = json.loads(message)
+        except Exception:
+            return
+        sim = data.get("sim") or data.get("symbol") or data.get("sym") or data.get("Simbol")
+        if sim is None:
+            return
+        if str(sim).upper() != str(symbol).upper():
+            return
+        pret = data.get("pret") or data.get("price")
+        bid = data.get("bid")
+        ask = data.get("ask")
+        volz = data.get("volz") or data.get("volume")
+        q.put(
+            {
+                "price": float(pret) if pret is not None else None,
+                "bid": float(bid) if bid is not None else None,
+                "ask": float(ask) if ask is not None else None,
+                "volume": float(volz) if volz is not None else None,
+            }
+        )
+        ws.close()
+
+    def on_error(ws, error):
+        q.put(None)
+
+    def on_close(ws, *args, **kwargs):
+        if q.empty():
+            q.put(None)
+
+    ws_app = websocket.WebSocketApp(
+        TV_WS_URL,
+        subprotocols=TV_WS_PROTOCOL,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    t = threading.Thread(target=ws_app.run_forever, kwargs={"ping_interval": 20})
+    t.daemon = True
+    t.start()
+
+    try:
+        data = q.get(timeout=timeout_sec)
+    except Exception:
+        data = None
+    return data
+
+def get_portfolio_tradeville(coduser, parola, demo=True, timeout_sec=8):
+    """Returneaza lista de pozitii din portofoliu Tradeville sau None daca nu reuseste."""
+    if not coduser or not parola:
+        return None
+    try:
+        import websocket  # type: ignore
+    except Exception:
+        return None
+
+    q = queue.Queue()
+
+    def on_open(ws):
+        try:
+            login_msg = {
+                "cmd": "login",
+                "prm": {
+                    "coduser": coduser,
+                    "parola": parola,
+                    "demo": bool(demo),
+                },
+            }
+            ws.send(json.dumps(login_msg))
+            port_msg = {
+                "cmd": "Portfolio",
+                "prm": {"data": "null"},
+            }
+            ws.send(json.dumps(port_msg))
+        except Exception:
+            q.put(None)
+
+    def on_message(ws, message):
+        try:
+            data = json.loads(message)
+        except Exception:
+            return
+        cmd = data.get("cmd") or data.get("CMD")
+        if str(cmd).lower() != "portfolio":
+            return
+        raw = data.get("prm") or {}
+        cols = raw.get("cols") or raw.get("COLS")
+        vals = raw.get("values") or raw.get("VALS")
+        if not cols or not vals:
+            q.put(None)
+        else:
+            rows = []
+            # forma asteptata: { "COLS": ["Account","Symbol",...], "VALS": [ [..], [..], ...] }
+            for row_vals in vals:
+                row = {}
+                for c, v in zip(cols, row_vals):
+                    row[str(c)] = v
+                rows.append(row)
+            q.put(rows)
+        ws.close()
+
+    def on_error(ws, error):
+        q.put(None)
+
+    def on_close(ws, *args, **kwargs):
+        if q.empty():
+            q.put(None)
+
+    ws_app = websocket.WebSocketApp(
+        TV_WS_URL,
+        subprotocols=TV_WS_PROTOCOL,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+    t = threading.Thread(target=ws_app.run_forever, kwargs={"ping_interval": 20})
+    t.daemon = True
+    t.start()
+
+    try:
+        data = q.get(timeout=timeout_sec)
+    except Exception:
+        data = None
+    return data
+
+NEWS_ZF_RSS = "https://www.zf.ro/rss"
+NEWS_PROFIT_RSS = "https://www.profit.ro/rss"
+
+_POS_WORDS = [
+    "crestere",
+    "creste",
+    "pozitiv",
+    "profit",
+    "record",
+    "dividend",
+    "majorare",
+    "castig",
+    "listare",
+    "apreciere",
+]
+
+_NEG_WORDS = [
+    "scadere",
+    "scade",
+    "negativ",
+    "pierdere",
+    "avertisment",
+    "problema",
+    "insolventa",
+    "faliment",
+    "declin",
+    "prabusire",
+]
+
+def _fetch_rss_items(url, timeout=5):
+    try:
+        resp = requests.get(url, timeout=timeout)
+        if resp.status_code != 200:
+            return []
+        root = ET.fromstring(resp.content)
+        items = []
+        # cautam elemente <item>
+        for item in root.iter("item"):
+            title_el = item.find("title")
+            desc_el = item.find("description")
+            pub_el = item.find("pubDate")
+            title = title_el.text if title_el is not None else ""
+            desc = desc_el.text if desc_el is not None else ""
+            pub = pub_el.text if pub_el is not None else ""
+            items.append(
+                {
+                    "title": title or "",
+                    "description": desc or "",
+                    "pubDate": pub or "",
+                }
+            )
+        return items
+    except Exception:
+        return []
+
+def _sentiment_score(text):
+    if not text:
+        return 0.0
+    txt = text.lower()
+    score = 0
+    for w in _POS_WORDS:
+        if w in txt:
+            score += 1
+    for w in _NEG_WORDS:
+        if w in txt:
+            score -= 1
+    return float(score)
+
+def get_news_impact_for_symbol(symbol, company_name=None):
+    """Returneaza 'Pozitiv', 'Negativ' sau 'Neutru' pe baza stirilor din ZF si Profit.ro."""
+    base = symbol.replace(".RO", "").upper()
+    names = [base]
+    if company_name:
+        names.append(str(company_name).strip())
+    texts = []
+    for url in (NEWS_ZF_RSS, NEWS_PROFIT_RSS):
+        for item in _fetch_rss_items(url):
+            t = f"{item.get('title','')} {item.get('description','')}"
+            if any(n and str(n).lower() in t.lower() for n in names):
+                texts.append(t)
+    if not texts:
+        return "Neutru"
+    total = 0.0
+    for t in texts:
+        total += _sentiment_score(t)
+    if total > 0.5:
+        return "Pozitiv"
+    if total < -0.5:
+        return "Negativ"
+    return "Neutru"
 BET_TICKERS = ["^BETI","^BET"]
 BET_SCALE = 176.0  # factor implicit; va fi recalibrat dinamic dupa valoarea BET de pe BVB
 
@@ -274,13 +534,86 @@ def score_row(r):
 
 def build_reason(r):
     if r.get("no_data"):
-        return "nu ai date de a genera raportul"
+        return "nu exista suficiente date pentru a genera raportul"
     parts = []
-    if r["momentum"] > 0: parts.append(f"+{r['momentum']:.1f}% in 30z")
-    if r["volatility"] > 5: parts.append(f"vol {r['volatility']:.1f}%")
-    if r["avg_volume"] > 100_000: parts.append("volum ridicat")
-    if r["pe"] is not None and r["pe"] < 15: parts.append(f"PE {r['pe']:.1f}")
-    return "; ".join(parts) if parts else "-"
+
+    # momentum pe 30 zile, pozitiv sau negativ
+    try:
+        mom = float(r.get("momentum", 0.0))
+        if mom != mom:
+            mom = 0.0
+    except Exception:
+        mom = 0.0
+    if mom > 0.5:
+        parts.append(f"+{mom:.1f}% in 30z")
+    elif mom < -0.5:
+        parts.append(f"{mom:.1f}% in 30z")
+
+    # volatilitate
+    try:
+        vol = float(r.get("volatility", 0.0))
+        if vol != vol:
+            vol = 0.0
+    except Exception:
+        vol = 0.0
+    if vol > 5:
+        parts.append(f"vol {vol:.1f}%")
+    elif vol > 0:
+        parts.append(f"vol {vol:.1f}% stabil")
+
+    # volum
+    try:
+        avg_vol = float(r.get("avg_volume", 0.0))
+        if avg_vol != avg_vol:
+            avg_vol = 0.0
+    except Exception:
+        avg_vol = 0.0
+    if avg_vol > 200_000:
+        parts.append("volum ridicat")
+    elif avg_vol > 50_000:
+        parts.append("volum mediu")
+
+    # evaluare PE
+    pe = r.get("pe")
+    if pe is not None:
+        try:
+            pe_val = float(pe)
+        except Exception:
+            pe_val = None
+        if pe_val is not None:
+            if pe_val < 15:
+                parts.append(f"PE {pe_val:.1f}")
+            elif pe_val > 20:
+                parts.append(f"PE ridicat {pe_val:.1f}")
+
+    # ultimul dividend net
+    yld = r.get("last_dividend_net_pct") or r.get("yield")
+    if yld is not None:
+        try:
+            yld_val = float(yld)
+        except Exception:
+            yld_val = None
+        if yld_val is not None and yld_val > 0:
+            parts.append(f"ult div net {yld_val:.1f}%")
+
+    # predictie 1 zi
+    pred_pct = r.get("pred_next_change_pct")
+    if pred_pct is not None:
+        try:
+            p = float(pred_pct)
+            if p != p:
+                p = None
+        except Exception:
+            p = None
+        if p is not None:
+            parts.append(f"predictie 1 zi {p:+.1f}%")
+
+    if not parts:
+        # motiv minim pe datele existente
+        parts.append(f"momentum {mom:.1f}%")
+        parts.append(f"vol {vol:.1f}%")
+
+    return "; ".join(parts)
 
 def compute_indicators(hist_df):
     try:
@@ -310,14 +643,29 @@ def compute_indicators(hist_df):
 
 def predict_next_day_linear(hist_df, min_points=15):
     """Model hibrid pe termen scurt calibrat pentru BVB.
-    - 40% trend pe ultimele 20 de zile
-    - 60% smoothing pe ultimele 5 zile
-    - limitare dupa volatilitatea zilnica
+    40% trend pe ultimele 20 de zile
+    60% smoothing pe ultimele 5 zile
+    limitare dupa volatilitatea zilnica
     """
     try:
         closes = hist_df["Close"].astype(float).dropna()
-        if len(closes) < min_points:
+        n = len(closes)
+        if n == 0:
             return None, None
+
+        # fallback pentru istoric scurt
+        if n < min_points:
+            if n >= 3:
+                p0, p1, p2 = closes.iloc[-3], closes.iloc[-2], closes.iloc[-1]
+                last_price = float(p2)
+                if last_price <= 0:
+                    return None, None
+                trend = ((p2 - p1) + (p1 - p0)) / 2.0
+                base_next = float(last_price + trend)
+                change_pct = (base_next / last_price - 1.0) * 100.0
+                return float(base_next), float(change_pct)
+            else:
+                return None, None
 
         # Pretul curent
         last_price = float(closes.iloc[-1])
@@ -336,7 +684,7 @@ def predict_next_day_linear(hist_df, min_points=15):
         tail_smooth = closes.tail(min(5, len(closes)))
         smoothed = tail_smooth.ewm(alpha=0.5, adjust=False).mean().iloc[-1]
 
-        # Baza: combinatie 40% trend, 60% smoothing
+        # Baza  combinatie 40% trend, 60% smoothing
         base_next = float(0.4 * trend_next + 0.6 * smoothed)
 
         # Volatilitatea ultimelor 20 de zile (pct_change)
@@ -346,13 +694,13 @@ def predict_next_day_linear(hist_df, min_points=15):
         else:
             vol20 = 0.0
 
-        # Limitare miscari la aproximativ +/- 1.5 deviatii standard
+        # Limitare miscari la aproximativ  1.5 deviatii standard
         if vol20 and not np.isnan(vol20):
             max_up = last_price * (1.0 + 1.5 * vol20)
             max_down = last_price * (1.0 - 1.5 * vol20)
             base_next = max(min(base_next, max_up), max_down)
 
-        # Daca volatilitatea este foarte mica, limitam oricum intre -2% si +2%
+        # Daca volatilitatea este foarte mica, limitam oricum intre 2% si +2%
         if vol20 is not None and not np.isnan(vol20) and vol20 < 0.02:
             cap_up = last_price * 1.02
             cap_down = last_price * 0.98
@@ -471,14 +819,14 @@ def compute_recommendations(rows_sorted):
         h = h.set_index(h.columns[0])
         v_text, _ = verdict(compute_indicators(h))
         s = r["score"]
-        if v_text == "OK de cumparat" and s >= q75:
+        if s != s:
+            s = 0.0
+        if s >= q75:
             rec = "Cumpara"
-        elif s >= q25 and s < q75:
+        elif s >= q25:
             rec = "Mentine"
-        elif v_text == "De evitat acum" and s < q25:
-            rec = "Vinde"
         else:
-            rec = "🔍 Insuficiente date pentru a face analiza"
+            rec = "Vinde"
         if r["symbol"] in USER_PORTFOLIO and rec == "Cumpara":
             rec = "Mentine"
         rec_map[r["symbol"]] = rec
@@ -610,6 +958,25 @@ with st.sidebar:
     st.header("Setari")
     history_days = st.number_input("Zile istoric", value=DEFAULT_SETTINGS["history_days"], step=10)
     momentum_lb = st.number_input("Lookback momentum", value=DEFAULT_SETTINGS["momentum_lookback"], step=5)
+    mode_view = st.selectbox("Mod afisare", ["Simplu", "Avansat"], index=1)
+    st.markdown("### Tradeville (optional)")
+    tv_user = st.text_input("User Tradeville", value="")
+    tv_pass = st.text_input("Parola Tradeville", value="", type="password")
+    tv_demo = st.checkbox("Cont demo Tradeville", value=True)
+    if "tv_logged_in" not in st.session_state:
+        st.session_state["tv_logged_in"] = False
+    col_tv1, col_tv2 = st.columns(2)
+    with col_tv1:
+        if st.button("Logare Tradeville"):
+            if tv_user and tv_pass:
+                st.session_state["tv_logged_in"] = True
+                st.success("Logare Tradeville reusita pentru aceasta sesiune.")
+            else:
+                st.warning("Completati userul si parola pentru logare.")
+    with col_tv2:
+        if st.button("Delogare"):
+            st.session_state["tv_logged_in"] = False
+            st.info("V-ati delogat din Tradeville pentru aceasta sesiune.")
 
 # lista completa de simboluri: BET + ETF-uri + AeRO standard
 ALL_TICKERS = BET_CONSTITUENTS + ETF_TICKERS + AERO_TICKERS
@@ -646,7 +1013,7 @@ def bet_history(period="3mo", interval="1d"):
             pass
     return None, "NA"
 
-tab_bet, tab_aero, tab_etf, tab_rezumat = st.tabs(["BET", "AeRO", "ETF-uri BVB", "Rezumat zi BVB"])
+tab_bet, tab_aero, tab_etf, tab_rezumat, tab_port = st.tabs(["BET", "AeRO", "ETF-uri BVB", "Rezumat zi BVB", "Portofoliu Tradeville"])
 
 with tab_bet:
     st.subheader("Recomandari BET")
@@ -661,10 +1028,15 @@ with tab_bet:
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
-            "Recomandare": rec_bet.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_bet.get(r["symbol"], "Mentine (date limitate)") if not r.get("no_data") else "Mentine (date limitate)",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_bet)])
-        st.dataframe(df_bet, use_container_width=True, hide_index=True)
+        if mode_view == "Simplu":
+            cols_show = [c for c in df_bet.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
+            df_show = df_bet[cols_show]
+        else:
+            df_show = df_bet
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista date pentru companiile din BET.")
 
@@ -793,8 +1165,10 @@ with tab_bet:
             symbols_bet = [r["symbol"] for r in rows_bet]
             sel = st.selectbox("Alege simbol", symbols_bet)
             perioada_act = st.selectbox("Perioada actiune", list(BET_PERIODS.keys()), index=5, key="bet_stock_period")
-            impact_stiri = st.selectbox("Impact stiri", ["Neutru", "Pozitiv", "Negativ"], index=0, key="bet_news_impact")
+            impact_stiri = st.selectbox("Impact stiri", ["Neutru", "Pozitiv", "Negativ", "Auto (din stiri)"], index=0, key="bet_news_impact")
             row = next(r for r in rows_bet if r["symbol"] == sel)
+            impact_auto = get_news_impact_for_symbol(sel, row.get("name"))
+            st.caption(f"Impact stiri automat (ZF + Profit.ro): {impact_auto}")
             h = row["history"].copy()
             if row.get("no_data"):
                 st.write("nu ai date de a genera raportul")
@@ -820,12 +1194,17 @@ with tab_bet:
 
                 # baza de predictie din model
                 base_pred_pct = row.get("pred_next_change_pct")
-                # ajustare din stiri
+                # ajustare din stiri (manual sau automat)
                 news_adj = 0.0
                 if impact_stiri == "Pozitiv":
                     news_adj = 0.5
                 elif impact_stiri == "Negativ":
                     news_adj = -0.5
+                elif impact_stiri.startswith("Auto"):
+                    if impact_auto == "Pozitiv":
+                        news_adj = 0.5
+                    elif impact_auto == "Negativ":
+                        news_adj = -0.5
 
                 if base_pred_pct is not None:
                     adj_pred_pct = base_pred_pct + news_adj
@@ -898,10 +1277,15 @@ with tab_aero:
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
-            "Recomandare": rec_aero.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_aero.get(r["symbol"], "Mentine (date limitate)") if not r.get("no_data") else "Mentine (date limitate)",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_aero)])
-        st.dataframe(df_aero, use_container_width=True, hide_index=True)
+        if mode_view == "Simplu":
+            cols_show = [c for c in df_aero.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
+            df_show = df_aero[cols_show]
+        else:
+            df_show = df_aero
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista companii AeRO de afisat in configuratia curenta.")
 
@@ -918,10 +1302,15 @@ with tab_etf:
             "Ex date": r.get("last_div_date") if r.get("last_div_date") else "",
             "Scor": round(r["score"],2) if r["score"]==r["score"] else np.nan,
             "Predictie 1 zi %": round(r.get("pred_next_change_pct", np.nan),2) if r.get("pred_next_change_pct") is not None else np.nan,
-            "Recomandare": rec_etf.get(r["symbol"], "🔍 Insuficiente date pentru a face analiza") if not r.get("no_data") else "🔍 Insuficiente date pentru a face analiza",
+            "Recomandare": rec_etf.get(r["symbol"], "Mentine (date limitate)") if not r.get("no_data") else "Mentine (date limitate)",
             "Motiv": build_reason(r)
         } for i, r in enumerate(rows_etf)])
-        st.dataframe(df_etf, use_container_width=True, hide_index=True)
+        if mode_view == "Simplu":
+            cols_show = [c for c in df_etf.columns if c in ['Nr', 'Simbol', 'Denumire', 'Pret', 'Delta zi %', 'Predictie 1 zi %', 'Recomandare', 'Motiv']]
+            df_show = df_etf[cols_show]
+        else:
+            df_show = df_etf
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")
 with tab_rezumat:
@@ -935,15 +1324,30 @@ with tab_rezumat:
 
     # Rezumat BET
     bet_data, _ = bet_history("1mo", "1d")
+    # fallback pe orizont mai lung daca nu vine nimic pe 1 luna
+    if (bet_data is None) or bet_data.empty:
+        bet_data, _ = bet_history("3mo", "1d")
     if bet_data is not None and not bet_data.empty:
         bet_last = float(bet_data["BET_Close"].iloc[-1])
-        bet_prev = float(bet_data["BET_Close"].iloc[-2]) if len(bet_data) >= 2 else bet_last
+        if len(bet_data) >= 2:
+            bet_prev = float(bet_data["BET_Close"].iloc[-2])
+        else:
+            bet_prev = bet_last
         bet_var = bet_last - bet_prev
         bet_varpct = (bet_var / bet_prev * 100.0) if bet_prev else 0.0
+        bet_min20 = float(bet_data["BET_Close"].tail(min(20, len(bet_data))).min())
+        bet_max20 = float(bet_data["BET_Close"].tail(min(20, len(bet_data))).max())
         st.markdown("Indice BET")
         st.write(f"Ultima variatie: {bet_var:+.2f} puncte, {bet_varpct:+.2f}%")
+        st.write(f"Intervalul aproximativ al ultimelor 20 de sedinte: minim {bet_min20:.2f}, maxim {bet_max20:.2f}.")
+        if bet_varpct > 0.5:
+            st.success("Piata este usor pozitiva pe BET astazi.")
+        elif bet_varpct < -0.5:
+            st.warning("Piata este usor negativa pe BET astazi.")
+        else:
+            st.info("Piata este mai degraba neutra pe BET astazi.")
     else:
-        st.write("Nu exista suficiente date pentru rezumatul BET.")
+        st.write("Nu exista deloc date disponibile pentru indicele BET in acest moment.")
 
     # Rezumat portofoliu utilizator
     st.markdown("Rezumat portofoliu (simbolurile din USER_PORTFOLIO)")
@@ -962,3 +1366,121 @@ with tab_rezumat:
         st.write("Nu exista simboluri din portofoliul utilizatorului in universul curent.")
 
         st.write("Nu exista ETF-uri BVB de afisat in configuratia curenta.")
+
+with tab_port:
+    st.subheader("Portofoliu Tradeville")
+    if not st.session_state.get("tv_logged_in", False) or not tv_user or not tv_pass:
+        st.info("Conectati-va la Tradeville in stanga pentru a incarca portofoliul.")
+    else:
+        port_rows = get_portfolio_tradeville(tv_user, tv_pass, demo=tv_demo)
+        if not port_rows:
+            st.warning("Nu se poate incarca portofoliul din Tradeville in acest moment.")
+        else:
+            df_port = pd.DataFrame(port_rows)
+            # incercam sa normalizam numele coloanelor
+            col_map = {}
+            for c in df_port.columns:
+                cl = str(c).lower()
+                if "symbol" in cl or cl == "simbol":
+                    col_map[c] = "Symbol"
+                elif "qty" in cl or "quantity" in cl or "cant" in cl:
+                    col_map[c] = "Quantity"
+                elif "avg" in cl:
+                    col_map[c] = "AvgPrice"
+                elif "marketprice" in cl or "last" in cl or "pret" in cl:
+                    col_map[c] = "MarketPrice"
+                elif "ccy" in cl or "currency" in cl:
+                    col_map[c] = "Ccy"
+                elif "account" in cl or "cont" in cl:
+                    col_map[c] = "Account"
+            if col_map:
+                df_port = df_port.rename(columns=col_map)
+
+            if "Symbol" not in df_port.columns or "Quantity" not in df_port.columns:
+                st.dataframe(df_port, use_container_width=True)
+            else:
+                df_port["Quantity"] = pd.to_numeric(df_port["Quantity"], errors="coerce").fillna(0.0)
+                if "AvgPrice" in df_port.columns:
+                    df_port["AvgPrice"] = pd.to_numeric(df_port["AvgPrice"], errors="coerce")
+                if "MarketPrice" in df_port.columns:
+                    df_port["MarketPrice"] = pd.to_numeric(df_port["MarketPrice"], errors="coerce")
+                else:
+                    df_port["MarketPrice"] = np.nan
+
+                df_port["Valoare"] = df_port["Quantity"] * df_port["MarketPrice"]
+                if "AvgPrice" in df_port.columns:
+                    df_port["Pnl"] = (df_port["MarketPrice"] - df_port["AvgPrice"]) * df_port["Quantity"]
+                else:
+                    df_port["Pnl"] = np.nan
+
+                total_val = df_port["Valoare"].sum(skipna=True)
+                st.metric("Valoare totala portofoliu (estimata)", f"{total_val:,.2f} RON".replace(",", " "))
+
+                # legam cu recomandarile existente
+                sym_to_row = {r["symbol"].replace(".RO", "").upper(): r for r in rows}
+                rec_cols = []
+                for idx_row, rr in df_port.iterrows():
+                    key = str(rr["Symbol"]).replace(".RO", "").upper()
+                    r = sym_to_row.get(key)
+                    if r:
+                        rec_cols.append(
+                            {
+                                "Symbol": rr["Symbol"],
+                                "Quantity": rr["Quantity"],
+                                "AvgPrice": rr.get("AvgPrice", np.nan),
+                                "MarketPrice": rr.get("MarketPrice", np.nan),
+                                "Valoare": rr.get("Valoare", np.nan),
+                                "Pnl": rr.get("Pnl", np.nan),
+                                "Scor": r.get("score"),
+                                "Recomandare": rec_bet.get(r["symbol"], rec_aero.get(r["symbol"], rec_etf.get(r["symbol"], ""))),
+                                "Predictie 1 zi %": r.get("pred_next_change_pct"),
+                            }
+                        )
+                    else:
+                        rec_cols.append(
+                            {
+                                "Symbol": rr["Symbol"],
+                                "Quantity": rr["Quantity"],
+                                "AvgPrice": rr.get("AvgPrice", np.nan),
+                                "MarketPrice": rr.get("MarketPrice", np.nan),
+                                "Valoare": rr.get("Valoare", np.nan),
+                                "Pnl": rr.get("Pnl", np.nan),
+                                "Scor": np.nan,
+                                "Recomandare": "",
+                                "Predictie 1 zi %": np.nan,
+                            }
+                        )
+                df_view = pd.DataFrame(rec_cols)
+                df_view["Pondere %"] = (df_view["Valoare"] / df_view["Valoare"].sum(skipna=True) * 100.0).round(2)
+                st.dataframe(df_view, use_container_width=True, hide_index=True)
+
+                # Rezumat portofoliu: de acumulat / de redus / de mentinut
+                if not df_view.empty:
+                    # definim praguri simple pentru pondere
+                    avg_pondere = df_view["Pondere %"].mean(skipna=True)
+                    high_pondere = max(avg_pondere * 1.5, 25.0)
+
+                    de_acumulat = df_view[
+                        (df_view["Recomandare"].str.contains("Cumpara", na=False)) &
+                        (df_view["Pondere %"] < avg_pondere)
+                    ]
+
+                    de_redus = df_view[
+                        (df_view["Recomandare"].str.contains("Vinde", na=False)) |
+                        (
+                            df_view["Pondere %"] > high_pondere
+                        )
+                    ]
+
+                    de_mentinut = df_view.drop(de_acumulat.index.union(de_redus.index))
+
+                    st.markdown("### Rezumat portofoliu")
+                    if not de_acumulat.empty:
+                        st.write("De acumulat (scor bun, pondere mai mica decat media):")
+                        st.dataframe(de_acumulat[["Symbol","Pondere %","Recomandare","Scor","Valoare"]], use_container_width=True, hide_index=True)
+                    if not de_mentinut.empty:
+                        st.write("De mentinut (pozitii echilibrate):")
+                        st.dataframe(de_mentinut[["Symbol","Pondere %","Recomandare","Scor","Valoare"]], use_container_width=True, hide_index=True)
+                    if not de_redus.empty:
+                        st.write("De redus (recomandare slaba sau pondere foarte mare):")
+                        st.dataframe(de_redus[["Symbol","Pondere %","Recomandare","Scor","Valoare"]], use_container_width=True, hide_index=True)

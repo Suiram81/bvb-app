@@ -289,29 +289,21 @@ def compute_indicators(hist_df):
         sma200 = close.rolling(200).mean()
         delta = close.diff()
         up = delta.clip(lower=0)
-        down = -1 * delta.clip(upper=0)
+        down = -1*delta.clip(upper=0)
         ma_up = up.rolling(14).mean()
         ma_down = down.rolling(14).mean().replace(0, 1e-9)
         rs = ma_up / ma_down
-        rsi14 = 100 - (100 / (1 + rs))
+        rsi14 = 100 - (100/(1+rs))
         ema_fast = close.ewm(span=12, adjust=False).mean()
         ema_slow = close.ewm(span=26, adjust=False).mean()
         macd = ema_fast - ema_slow
         signal = macd.ewm(span=9, adjust=False).mean()
-
-        max_60 = close.tail(60).max()
-        if pd.notna(max_60) and max_60 > 0:
-            drawdown_60 = (close.iloc[-1] / max_60 - 1.0) * 100.0
-        else:
-            drawdown_60 = None
-
         return {
             "sma50_last": float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else None,
             "sma200_last": float(sma200.iloc[-1]) if not pd.isna(sma200.iloc[-1]) else None,
             "rsi14_last": float(rsi14.iloc[-1]) if not pd.isna(rsi14.iloc[-1]) else None,
             "macd_last": float(macd.iloc[-1]) if not pd.isna(macd.iloc[-1]) else None,
             "signal_last": float(signal.iloc[-1]) if not pd.isna(signal.iloc[-1]) else None,
-            "drawdown_60": float(drawdown_60) if drawdown_60 is not None else None,
         }
     except Exception:
         return {}
@@ -498,55 +490,26 @@ def compute_bet_alert(indicators):
     sig = indicators.get("signal_last")
     sma50 = indicators.get("sma50_last")
     sma200 = indicators.get("sma200_last")
-    dd60 = indicators.get("drawdown_60")
 
-    # avem nevoie doar de RSI, MACD si semnal ca sa dam macar un verdict neutru
-    values_req = [rsi, macd, sig]
-    if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values_req):
+    values = [rsi, macd, sig, sma50, sma200]
+    if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values):
         return None, "Nu exista suficiente date pentru a calcula semnalul tehnic pe BET."
 
-    red = (
-        dd60 <= -10.0 and
-        rsi > 70 and
-        macd < sig and
-        sma50 < sma200
-    )
-
-    yellow = (
-        -10.0 < dd60 <= -5.0 and
-        60 <= rsi <= 70 and
-        abs(macd - sig) < 0.1 and
-        abs(sma50 - sma200) / max(abs(sma200), 1e-9) < 0.02
-    )
-
-    green = (
-        dd60 > -5.0 and
-        40 <= rsi < 70 and
-        macd > sig and
-        sma50 > sma200
-    )
+    red = (rsi is not None and rsi > 70) and (macd is not None and sig is not None and macd < sig) and (sma50 is not None and sma200 is not None and sma50 < sma200)
+    yellow = (rsi is not None and 60 <= rsi <= 70) and (macd is not None and sig is not None and abs(macd - sig) < 0.1) and (sma50 is not None and sma200 is not None and abs(sma50 - sma200) / max(abs(sma200), 1e-9) < 0.02)
+    green = (rsi is not None and 40 <= rsi < 70) and (macd is not None and sig is not None and macd > sig) and (sma50 is not None and sma200 is not None and sma50 > sma200)
 
     if red:
-        msg = "🔴 Corectie in derulare pe BET. Scadere de cel putin 10% fata de maximul pe 60 de zile, RSI peste 70, MACD sub semnal si SMA50 sub SMA200."
+        msg = "🔴 Atentie: Posibil inceput de corectie pe BET. RSI peste 70, MACD sub semnal si SMA50 sub SMA200. Fiti prudent."
         return "red", msg
-
     if yellow:
-        msg = "🟡 Posibil inceput de corectie pe BET. Scadere intre 5% si 10% fata de maximul pe 60 de zile si semnale tehnice mixte."
+        msg = "🟡 Volatilitate ridicata pe BET. RSI intre 60 si 70, MACD aproape de semnal si SMA50 foarte aproape de SMA200. Atentie la intrarile noi."
         return "yellow", msg
-
     if green:
-        msg = "🟢 Trend pozitiv puternic pe BET. Scadere mica fata de maximul recent si indicatori tehnici favorabili."
+        msg = "🟢 Trend pozitiv confirmat pe BET. RSI intre 40 si 70, MACD peste semnal si SMA50 peste SMA200. Conditii tehnice bune pentru acumulare."
         return "green", msg
 
-    if dd60 is not None and sma50 is not None and sma200 is not None:
-        if dd60 < -2.0 and sma50 <= sma200:
-            msg = "🔵 Trend negativ moderat pe BET. Scaderi mici fata de maximul recent si trend tehnic usor descendent."
-            return "neutral", msg
-        if dd60 > 2.0 and sma50 >= sma200:
-            msg = "🔵 Trend pozitiv moderat pe BET. Crestere usoara fata de maximul recent si trend tehnic ascendent."
-            return "neutral", msg
-
-    msg = "ℹ️ Niciun semnal tehnic puternic pe BET in acest moment. Piata este intr-o zona neutra, fara trend clar."
+    msg = "ℹ️ Niciun semnal tehnic puternic pe BET in acest moment. Piata este intr-o zona neutra."
     return "neutral", msg
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -807,10 +770,7 @@ with tab_bet:
                 st.altair_chart(chart, use_container_width=True)
             # Alerte BET pe baza indicatorilor tehnici
             try:
-                # istoric lung pentru calculul indicatorilor, independent de perioada afisata pe grafic
-                bet_ind_df, _src = bet_history("5y", "1d")
-                if bet_ind_df is None or bet_ind_df.empty:
-                    bet_ind_df = data.copy()
+                bet_ind_df = data.copy()
                 bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
                 bet_ind = compute_indicators(bet_ind_df)
                 alert_type, alert_msg = compute_bet_alert(bet_ind)

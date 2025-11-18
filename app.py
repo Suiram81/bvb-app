@@ -804,9 +804,13 @@ with tab_bet:
 
                 chart = (area + line).interactive()
                 st.altair_chart(chart, use_container_width=True)
+
             # Alerte BET pe baza indicatorilor tehnici
             try:
-                bet_ind_df = data.copy()
+                # folosim istoric lung pentru semnalul tehnic, independent de perioada selectata in grafic
+                bet_hist_full, _ = bet_history("5y", "1d")
+                bet_src = bet_hist_full if bet_hist_full is not None and not bet_hist_full.empty else data
+                bet_ind_df = bet_src.copy()
                 bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
                 bet_ind = compute_indicators(bet_ind_df)
                 alert_type, alert_msg = compute_bet_alert(bet_ind)

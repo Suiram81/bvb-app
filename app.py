@@ -500,8 +500,9 @@ def compute_bet_alert(indicators):
     sma200 = indicators.get("sma200_last")
     dd60 = indicators.get("drawdown_60")
 
-    values = [rsi, macd, sig, sma50, sma200, dd60]
-    if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values):
+    # avem nevoie doar de RSI, MACD si semnal ca sa dam macar un verdict neutru
+    values_req = [rsi, macd, sig]
+    if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in values_req):
         return None, "Nu exista suficiente date pentru a calcula semnalul tehnic pe BET."
 
     red = (
@@ -804,13 +805,12 @@ with tab_bet:
 
                 chart = (area + line).interactive()
                 st.altair_chart(chart, use_container_width=True)
-
             # Alerte BET pe baza indicatorilor tehnici
             try:
-                # folosim istoric lung pentru semnalul tehnic, independent de perioada selectata in grafic
-                bet_hist_full, _ = bet_history("5y", "1d")
-                bet_src = bet_hist_full if bet_hist_full is not None and not bet_hist_full.empty else data
-                bet_ind_df = bet_src.copy()
+                # istoric lung pentru calculul indicatorilor, independent de perioada afisata pe grafic
+                bet_ind_df, _src = bet_history("5y", "1d")
+                if bet_ind_df is None or bet_ind_df.empty:
+                    bet_ind_df = data.copy()
                 bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
                 bet_ind = compute_indicators(bet_ind_df)
                 alert_type, alert_msg = compute_bet_alert(bet_ind)

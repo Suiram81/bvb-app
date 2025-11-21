@@ -1082,25 +1082,78 @@ with tab_bet:
                 else:
                     st.info(alert_msg)
 
-                # Predictii BET pe mai multe orizonturi
+                # Predictii BET pe mai multe orizonturi (model hibrid)
                 try:
                     st.write("Predictii BET (model statistic)")
                     horizons = [("1 zi", 1), ("5 zile", 5), ("30 zile", 22)]
+
                     closes = data["BET_Close"].astype(float).dropna()
-                    last_raw = float(closes.iloc[-1]) if len(closes) else None
-                    rets = closes.pct_change().dropna()
-                    mu = rets.mean() if len(rets) else 0.0
+                    if len(closes) < 5:
+                        raise Exception("Istoric insuficient pentru predictii.")
+
+                    # trend scurt si volatilitate
+                    closes_short = closes.tail(10)
+                    rets_short = closes_short.pct_change().dropna()
+                    mu_short = rets_short.mean() if len(rets_short) else 0.0
+                    vol_short = rets_short.std() if len(rets_short) else 0.0
+
+                    # bias tehnic din indicatori
+                    rsi = bet_ind.get("rsi14_last")
+                    macd = bet_ind.get("macd_last")
+                    sig = bet_ind.get("signal_last")
+                    sma50 = bet_ind.get("sma50_last")
+                    sma200 = bet_ind.get("sma200_last")
+
                     for label_h, steps in horizons:
+                        base_pct = None
+
+                        # 1) model ARIMA pe BET, daca este disponibil
                         pred_raw = bet_arima_forecast(data, steps=steps)
-                        if pred_raw is None and last_raw is not None:
-                            # fallback simplu: drift pe baza randamentului mediu zilnic
-                            pred_raw = float(last_raw * (1.0 + mu) ** steps)
-                        if pred_raw is None:
-                            continue
-                        pred_val = pred_raw * scale
-                        pred_diff = pred_val - val
-                        pred_pct = (pred_diff / val * 100.0) if val else 0.0
-                        txt = f"- Orizont {label_h}: {pred_val:,.2f} puncte ({pred_pct:+.2f}%)."
+                        if pred_raw is not None:
+                            pred_val_raw = float(pred_raw * scale)
+                            base_pct = (pred_val_raw - val) / val * 100.0 if val else 0.0
+
+                        # 2) drift pe trend scurt ca fallback
+                        drift_pct = mu_short * steps * 100.0
+
+                        if base_pct is None:
+                            base_pct = drift_pct
+
+                        # 3) ajustare din indicatorii tehnici
+                        tech_bias_pct = 0.0
+                        if rsi is not None and macd is not None and sig is not None and sma50 is not None and sma200 is not None:
+                            # trend ascendent solid
+                            if (40 <= rsi <= 60) and (macd > sig) and (sma50 > sma200):
+                                tech_bias_pct += 0.10 * steps
+                            # supracumparat, risc de scadere
+                            if rsi > 70 and macd < sig:
+                                tech_bias_pct -= 0.20 * steps
+                            # supravandut, sanse de rebound
+                            if rsi < 30 and macd > sig:
+                                tech_bias_pct += 0.15 * steps
+
+                        # 4) penalizare sau bonus in functie de alerta curenta
+                        corectie_bias_pct = 0.0
+                        if alert_type == "red":
+                            corectie_bias_pct -= 0.30 * steps
+                        elif alert_type == "yellow":
+                            corectie_bias_pct -= 0.15 * steps
+                        elif alert_type == "green":
+                            corectie_bias_pct += 0.10 * steps
+
+                        # 5) combinatie finala
+                        combined_pct = 0.4 * base_pct + 0.3 * drift_pct + 0.3 * tech_bias_pct + corectie_bias_pct
+
+                        # limitam variatiile la un interval realist in functie de volatilitate
+                        if vol_short and vol_short > 0:
+                            max_move = float(2.0 * vol_short * steps * 100.0)
+                            if combined_pct > max_move:
+                                combined_pct = max_move
+                            if combined_pct < -max_move:
+                                combined_pct = -max_move
+
+                        pred_val = val * (1.0 + combined_pct / 100.0) if val else val
+                        txt = f"- Orizont {label_h}: {pred_val:,.2f} puncte ({combined_pct:+.2f}%)."
                         st.write(txt.replace(",", " ").replace(".", ","))
                 except Exception:
                     pass

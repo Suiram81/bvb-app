@@ -1086,8 +1086,15 @@ with tab_bet:
                 try:
                     st.write("Predictii BET (model statistic)")
                     horizons = [("1 zi", 1), ("5 zile", 5), ("30 zile", 22)]
+                    closes = data["BET_Close"].astype(float).dropna()
+                    last_raw = float(closes.iloc[-1]) if len(closes) else None
+                    rets = closes.pct_change().dropna()
+                    mu = rets.mean() if len(rets) else 0.0
                     for label_h, steps in horizons:
                         pred_raw = bet_arima_forecast(data, steps=steps)
+                        if pred_raw is None and last_raw is not None:
+                            # fallback simplu: drift pe baza randamentului mediu zilnic
+                            pred_raw = float(last_raw * (1.0 + mu) ** steps)
                         if pred_raw is None:
                             continue
                         pred_val = pred_raw * scale

@@ -745,6 +745,19 @@ def compute_recommendations(rows_sorted):
     return rec_map
 
 def compute_bet_alert(indicators):
+    # Semnal rapid din variatia zilnica a indicelui
+    try:
+        delta_pct = indicators.get("daily_change_pct")
+        if delta_pct is not None:
+            if delta_pct <= -1.5:
+                msg = "🔴 Scadere puternica pe BET. Corectie in curs. Fiti prudent."
+                return "red", msg
+            if -1.5 < delta_pct <= -0.8:
+                msg = "🟡 Scadere moderata pe BET. Posibila corectie in dezvoltare. Atentie la intrarile noi."
+                return "yellow", msg
+    except Exception:
+        pass
+
     rsi = indicators.get("rsi14_last")
     macd = indicators.get("macd_last")
     sig = indicators.get("signal_last")
@@ -1057,6 +1070,8 @@ with tab_bet:
                 bet_ind_df = data.copy()
                 bet_ind_df = bet_ind_df.rename(columns={"BET_Close": "Close"})
                 bet_ind = compute_indicators(bet_ind_df)
+                # adaugam variatia zilnica pentru semnal rapid de corectie
+                bet_ind["daily_change_pct"] = varpct
                 alert_type, alert_msg = compute_bet_alert(bet_ind)
                 if alert_type == "red":
                     st.error(alert_msg)

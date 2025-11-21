@@ -1081,6 +1081,22 @@ with tab_bet:
                     st.success(alert_msg)
                 else:
                     st.info(alert_msg)
+
+                # Predictii BET pe mai multe orizonturi
+                try:
+                    st.write("Predictii BET (model statistic)")
+                    horizons = [("1 zi", 1), ("5 zile", 5), ("30 zile", 22)]
+                    for label_h, steps in horizons:
+                        pred_raw = bet_arima_forecast(data, steps=steps)
+                        if pred_raw is None:
+                            continue
+                        pred_val = pred_raw * scale
+                        pred_diff = pred_val - val
+                        pred_pct = (pred_diff / val * 100.0) if val else 0.0
+                        txt = f"- Orizont {label_h}: {pred_val:,.2f} puncte ({pred_pct:+.2f}%)."
+                        st.write(txt.replace(",", " ").replace(".", ","))
+                except Exception:
+                    pass
             except Exception:
                 st.info("Nu se poate calcula alerta tehnica pentru BET in acest moment.")
         else:
